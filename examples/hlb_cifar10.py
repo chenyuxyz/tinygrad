@@ -12,6 +12,7 @@ from tinygrad import nn, dtypes, Tensor, Device, GlobalCounters, TinyJit
 from tinygrad.nn.state import get_state_dict, get_parameters
 from tinygrad.nn import optim
 from tinygrad.helpers import Context, BEAM, WINO, getenv
+from tinygrad.shape.symbolic import Variable
 
 BS, EVAL_BS, STEPS = getenv("BS", 512), getenv('EVAL_BS', 500), getenv("STEPS", 1000)
 GPUS = [f'{Device.DEFAULT}:{i}' for i in range(getenv("GPUS", 1))]
@@ -185,8 +186,6 @@ def train_cifar():
     while True:
       st = time.monotonic()
       X, Y = X_in, Y_in
-      order = list(range(0, X.shape[0]))
-      random.shuffle(order)
       if is_train:
         # TODO: these are not jitted
         if getenv("RANDOM_CROP", 1):
@@ -196,16 +195,22 @@ def train_cifar():
         if getenv("CUTMIX", 1):
           if step >= hyp['net']['cutmix_steps']:
             X, Y = cutmix(X, Y, mask_size=hyp['net']['cutmix_size'])
-      X, Y = X.numpy(), Y.numpy()
+        # only shuffle training set
+        order = list(range(0, X.shape[0]))
+        random.shuffle(order)
+        X, Y = X.numpy(), Y.numpy()
+        X, Y = Tensor(X[order, :]), Tensor(Y[order])
       et = time.monotonic()
       print(f"shuffling {'training' if is_train else 'test'} dataset in {(et-st)*1e3:.2f} ms ({epoch=})")
       for i in range(0, X.shape[0], BS):
         # pad the last batch  # TODO: not correct for test
-        batch_end = min(i+BS, Y.shape[0])
-        x = Tensor(X[order[batch_end-BS:batch_end],:])
-        y = Tensor(Y[order[batch_end-BS:batch_end]])
+        batch_end = min(i+BS, X.shape[0])
         step += 1
-        yield x, y
+        if i == 0:
+          # yield the newly processed X and Y
+          yield X, Y, batch_end
+        else:
+          yield None, None, batch_end
       epoch += 1
       if not is_train: break
 
@@ -330,15 +335,23 @@ def train_cifar():
         corrects_ema = []
         losses = []
         losses_ema = []
-        for Xt, Yt in fetch_batches(X_test, Y_test, BS=EVAL_BS, is_train=False):
-          if len(GPUS) > 1:
-            Xt, Yt = Xt.shard(GPUS, axis=0), Yt.shard(GPUS, axis=0)
+        for Xt_new, Yt_new, batch_end in fetch_batches(X_test, Y_test, BS=EVAL_BS, is_train=False):
+          batch_end_var = Variable("batch_end", 1, X_test.shape[0]).bind(batch_end)
 
-          correct, loss = eval_step_jitted(model, Xt, Yt)
+          if Xt_new is not None:
+            X_t, Y_t = Xt_new, Yt_new
+
+          X_t_batch = X_t.shrink(((batch_end_var-BS, batch_end_var), None, None, None))
+          Y_t_batch = Y_t.shrink(((batch_end_var-BS, batch_end_var), None))
+
+          if len(GPUS) > 1:
+            X_t_batch, Y_t_batch = X_t_batch.shard(GPUS, axis=0), Y_t_batch.shard(GPUS, axis=0)
+
+          correct, loss = eval_step_jitted(model, X_t_batch, Y_t_batch)
           losses.append(loss.numpy().tolist())
           corrects.extend(correct.numpy().tolist())
           if model_ema:
-            correct_ema, loss_ema = eval_step_ema_jitted(model_ema.net_ema, Xt, Yt)
+            correct_ema, loss_ema = eval_step_ema_jitted(model_ema.net_ema, X_t_batch, Y_t_batch)
             losses_ema.append(loss_ema.numpy().tolist())
             corrects_ema.extend(correct_ema.numpy().tolist())
 
@@ -353,13 +366,20 @@ def train_cifar():
 
       if STEPS == 0 or i == STEPS: break
 
-      X, Y = next(batcher)
+      X_new, Y_new, batch_end = next(batcher)
+      if X_new is not None:
+        X, Y = X_new, Y_new
+
+      batch_end_var = Variable("batch_end", 1, X.shape[0]).bind(batch_end)
+      X_batch = X.shrink(((batch_end_var-BS, batch_end_var), None, None, None))
+      Y_batch = Y.shrink(((batch_end_var-BS, batch_end_var), None))
+
       if len(GPUS) > 1:
-        X, Y = X.shard(GPUS, axis=0), Y.shard(GPUS, axis=0)
+        X_batch, Y_batch = X_batch.shard(GPUS, axis=0), Y_batch.shard(GPUS, axis=0)
 
       GlobalCounters.reset()
       with Context(BEAM=getenv("LATEBEAM", BEAM.value), WINO=getenv("LATEWINO", WINO.value)):
-        loss = train_step_jitted(model, [opt_bias, opt_non_bias], [lr_sched_bias, lr_sched_non_bias], X, Y)
+        loss = train_step_jitted(model, [opt_bias, opt_non_bias], [lr_sched_bias, lr_sched_non_bias], X_batch, Y_batch)
         et = time.monotonic()
         loss_cpu = loss.numpy()
       # EMA for network weights
