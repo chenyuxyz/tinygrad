@@ -18,6 +18,21 @@ def un1d(shape:Tuple[sint, ...], offs:sint) -> List[sint]:
 
 @functools.lru_cache(maxsize=None)
 def merge_views(vm2:View, vm1:View) -> Optional[View]:
+  # if any dim in vm2 is 1 and no mask, can squeeze that 1 first
+  changed = True
+  while 1 in vm2.shape and changed:
+    changed = False
+    if vm2.mask is None:
+      vm2 = vm2.reshape(tuple(s for s in vm2.shape if s != 1))
+    else:
+      new_shape = []
+      for s,m in zip(vm2.shape, vm2.mask):
+        if s != 1 or m != (0, 1):
+          new_shape.append(s)
+        else:
+          changed = True
+      vm2 = vm2.reshape(tuple(new_shape))
+
   if vm1.contiguous and vm1.shape == vm2.shape: return vm2
   if vm2.contiguous: return vm1
   if not vm2.mask and vm1.offset == 0 and None not in (rstrides := ShapeTracker((vm2, vm1)).real_strides()):
