@@ -94,9 +94,14 @@ class Node:
     if not nodes: return NumNode(0)
     if len(nodes) == 1: return nodes[0]
 
+    def flat_components(nodes):
+      for node in nodes:
+        if isinstance(node, SumNode): yield from flat_components(node.nodes)
+        else: yield node
+
     mul_groups: Dict[Node, int] = {}
     num_node_sum = 0
-    for node in SumNode(nodes).flat_components:
+    for node in flat_components(nodes):
       if node.__class__ is NumNode: num_node_sum += node.b
       elif node.__class__ is MulNode: mul_groups[node.a] = mul_groups.get(node.a, 0) + node.b
       else: mul_groups[node] = mul_groups.get(node, 0) + 1
@@ -222,11 +227,11 @@ class SumNode(RedNode):
     fully_divided: List[Node] = []
     rest: List[Node] = []
     if isinstance(b, SumNode):
-      nu_num = sum(node.b for node in self.flat_components if node.__class__ is NumNode)
-      de_num = sum(node.b for node in b.flat_components if node.__class__ is NumNode)
+      nu_num = sum(node.b for node in self.nodes if node.__class__ is NumNode)
+      de_num = sum(node.b for node in b.nodes if node.__class__ is NumNode)
       if nu_num > 0 and de_num and (d:=nu_num//de_num) > 0: return NumNode(d) + (self-b*d) // b
     if isinstance(b, Node):
-      for x in self.flat_components:
+      for x in self.nodes:
         if x % b == 0: fully_divided.append(x // b)
         else: rest.append(x)
       if (sum_fully_divided:=create_node(SumNode(fully_divided))) != 0: return sum_fully_divided + create_node(SumNode(rest)) // b
@@ -236,7 +241,7 @@ class SumNode(RedNode):
     fully_divided, rest = [], []
     _gcd = b
     divisor = 1
-    for x in self.flat_components:
+    for x in self.nodes:
       if x.__class__ in (NumNode, MulNode):
         if x.b%b == 0: fully_divided.append(x//b)
         else:
@@ -256,8 +261,8 @@ class SumNode(RedNode):
   @functools.lru_cache(maxsize=None)  # pylint: disable=method-cache-max-size-none
   def __mod__(self, b: Union[Node, int]):
     if isinstance(b, SumNode):
-      nu_num = sum(node.b for node in self.flat_components if node.__class__ is NumNode)
-      de_num = sum(node.b for node in b.flat_components if node.__class__ is NumNode)
+      nu_num = sum(node.b for node in self.nodes if node.__class__ is NumNode)
+      de_num = sum(node.b for node in b.nodes if node.__class__ is NumNode)
       if nu_num > 0 and de_num and (d:=nu_num//de_num) > 0: return (self-b*d) % b
     if isinstance(b, Node) and (b - self).min > 0: return self # b - self simplifies the node
     new_nodes: List[Node] = []
@@ -289,11 +294,6 @@ class SumNode(RedNode):
 
   def substitute(self, var_vals: Mapping[Variable, Union[NumNode, Variable]]) -> Node:
     return Node.sum([node.substitute(var_vals) for node in self.nodes])
-
-  # recursively expand sumnode components
-  # TODO: can remove this if there's no SumNode inside SumNode
-  @property
-  def flat_components(self): return [y for x in self.nodes for y in (x.flat_components if isinstance(x, SumNode) else [x])]
 
 class AndNode(RedNode):
   def get_bounds(self) -> Tuple[int, int]: return min([x.min for x in self.nodes]), max([x.max for x in self.nodes])
