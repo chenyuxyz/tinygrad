@@ -88,7 +88,7 @@ def _expr_view(view:View, idxs:List[Node], valid:Optional[Node]=None) -> Tuple[N
   iexpr: List[Node] = [NumNode(view.offset) if isinstance(view.offset, int) else view.offset]
   vexpr: List[Node] = [valid] if valid is not None else []
   for idx,sh,st,m in zip(idxs, view.shape, view.strides, view.mask if view.mask is not None else [None]*len(view.shape)):
-    if sh != 1 and st != 0: iexpr.append(idx*st)
+    if sh != 1 and st != 0: iexpr.append(idx.__mul__(st, False))
     if m is not None: vexpr += [idx >= m[0], idx < m[1]]
   return Node.sum(iexpr), Node.ands(vexpr)
 

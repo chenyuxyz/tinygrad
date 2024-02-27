@@ -40,7 +40,7 @@ class Node:
   def __gt__(self, b:Union[Node,int]): return (-self) < (-b)
   def __ge__(self, b:Union[Node,int]): return (-self) < (-b+1)
   def __lt__(self, b:Union[Node,int]): return create_node(LtNode(self, b))
-  def __mul__(self, b:Union[Node, int]):
+  def __mul__(self, b:Union[Node, int], distributive=True):
     if b == 0: return NumNode(0)
     if b == 1: return self
     return create_node(MulNode(self, b.b)) if isinstance(b, NumNode) else create_node(MulNode(self, b))
@@ -143,7 +143,7 @@ class NumNode(Node):
   def bind(self, val):
     assert self.b == val, f"cannot bind {val} to {self}"
     return self
-  def __mul__(self, b:Union[Node,int]): return NumNode(self.b*b) if isinstance(b, int) else b*self.b
+  def __mul__(self, b:Union[Node,int], distributive=True): return NumNode(self.b*b) if isinstance(b, int) else b*self.b
   def __eq__(self, other): return self.b == other
   def __hash__(self): return hash(self.b)  # needed with __eq__ override
   def substitute(self, var_vals: Mapping[Variable, Union[NumNode, Variable]]) -> Node: return self
@@ -173,7 +173,7 @@ class MulNode(OpNode):
     if isinstance(b, Node) or isinstance(self.b, Node) or self.b == -1: return Node.__lt__(self, b)
     sgn = 1 if self.b > 0 else -1
     return Node.__lt__(self.a*sgn, (b + abs(self.b) - 1)//abs(self.b))
-  def __mul__(self, b: Union[Node, int]): return self.a*(self.b*b) # two muls in one mul
+  def __mul__(self, b: Union[Node, int], distributive=True): return self.a*(self.b*b) # two muls in one mul
   def __floordiv__(self, b: Union[Node, int], factoring_allowed=False): # NOTE: mod negative isn't handled right
     if self.b % b == 0: return self.a*(self.b//b)
     if b % self.b == 0 and self.b > 0: return self.a//(b//self.b)
@@ -212,7 +212,9 @@ class RedNode(Node):
 class SumNode(RedNode):
   def get_bounds(self) -> Tuple[int, int]: return sum([x.min for x in self.nodes]), sum([x.max for x in self.nodes])
   @functools.lru_cache(maxsize=None)  # pylint: disable=method-cache-max-size-none
-  def __mul__(self, b: Union[Node, int]): return Node.sum([x*b for x in self.nodes]) # distribute mul into sum
+  def __mul__(self, b: Union[Node, int], distributive=True):
+    if distributive: return Node.sum([x*b for x in self.nodes]) # distribute mul into sum
+    return Node.__mul__(self, b)
   @functools.lru_cache(maxsize=None)  # pylint: disable=method-cache-max-size-none
   def __floordiv__(self, b: Union[Node, int], factoring_allowed=True):
     if self == b: return NumNode(1)
