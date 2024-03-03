@@ -107,6 +107,9 @@ def beam_search(lin:Linearizer, rawbufs, amt:int, allow_test_size=True) -> Linea
   default_parallel, min_progress_micros = 1 if lin.opts.device in {"CUDA", "HIP"} else 0, getenv("BEAM_MIN_PROGRESS",0)
   if beam_pool is None and getenv("PARALLEL", default_parallel): beam_pool = multiprocessing.Pool(multiprocessing.cpu_count(), _init_worker)
 
+  print(f"{default_parallel=}, {getenv('PARALLEL', default_parallel)=}")
+  print(f"{beam_pool=}")
+
   try:
     var_vals = {k:(k.max+k.min)//2 for k in lin.ast.vars()}
     exiting, st = False, time.perf_counter()

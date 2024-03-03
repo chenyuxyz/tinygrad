@@ -57,7 +57,7 @@ class TestBeamSearch(unittest.TestCase):
     actual = a.numpy()
     np.testing.assert_allclose(actual, desired)
 
-  @unittest.skipIf(CI, "flaky. CL_OUT_OF_RESOURCES")
+  # @unittest.skipIf(CI, "flaky. CL_OUT_OF_RESOURCES")
   def test_conv_beam(self):
     c = Conv2d(3, 16, (3,3))
     x = Tensor.rand(1,3,32,32)
