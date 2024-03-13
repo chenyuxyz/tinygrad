@@ -82,8 +82,9 @@ def uops_to_llvm_ir(function_name:str, uops:UOpGraph) -> str:
     if a.type.is_pointer: a.add_attribute("noalias")
 
   # add the function attribute "no-nans-fp-math"="true", which informs llvm that it allowed to use vectorization optimizations
-  func.attributes._known = func.attributes._known.union(frozenset(['"no-nans-fp-math"="true"']))
+  func.attributes._known = func.attributes._known.union(frozenset(['"no-nans-fp-math"="true"', '"no-infs-fp-math"="true"']))
   func.attributes.add('"no-nans-fp-math"="true"')
+  func.attributes.add('"no-infs-fp-math"="true"')
 
   bb = [ir.IRBuilder(func.append_basic_block("entry"))]
   loop_blocks: List = []
