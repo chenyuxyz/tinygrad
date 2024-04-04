@@ -3,9 +3,9 @@ from typing import Union, Type, Tuple, Any, List, Dict, Callable
 import functools, hashlib, math, operator, ctypes
 from enum import Enum, auto
 from dataclasses import dataclass
-from tinygrad.helpers import prod, dedup
+from tinygrad.helpers import dedup
 from tinygrad.dtype import dtypes, DType
-from tinygrad.shape.symbolic import Variable, sint
+from tinygrad.shape.symbolic import Variable
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.buffer import Buffer
 
@@ -72,36 +72,6 @@ class LazyOp:
   def lazyops(self) -> List[LazyOp]: return dedup([self] + [item for x in self.src for item in x.lazyops])
   def vars(self) -> List[Variable]:
     return sorted(set.union(*[x.arg.st.vars() for x in self.lazyops if x.op in BufferOps], set()), key=lambda x: str(x.expr))
-
-# **************** independent FlopCounter ****************
-
-@dataclass
-class FlopCounter:
-  shape: Tuple[int, ...]
-  dtype: DType
-  flops: sint
-  mem: Dict[int, int]
-  @property
-  def mem_estimate(self): return sum(self.mem.values())
-  def consume_flops(self):
-    self.flops, ret = 0, self.flops
-    return ret
-
-InterpretedFlopCounter: Dict[Op, Callable] = {
-  BufferOps.LOAD: lambda arg: FlopCounter(arg.st.shape, arg.dtype, 0, {arg.idx: arg.dtype.itemsize*arg.st.real_size()}),
-  BufferOps.CONST: lambda arg: FlopCounter(arg.st.shape, arg.dtype, 0, {}),
-  BufferOps.STORE: lambda self,arg: FlopCounter(arg.st.shape, arg.dtype, self.consume_flops(), {**self.mem, arg.idx: arg.dtype.itemsize*arg.st.real_size()}),  # noqa: E501
-  UnaryOps.CAST: lambda self,arg: FlopCounter(self.shape, arg[0], self.consume_flops(), self.mem),   # cast uses no flops
-  **{op:lambda self: FlopCounter(self.shape, self.dtype, self.consume_flops() + prod(self.shape), self.mem) for op in UnaryOps if op is not UnaryOps.CAST},  # noqa: E501
-  **{op:lambda self,y,op=op: FlopCounter(self.shape,  dtypes.bool if op in (BinaryOps.CMPLT, BinaryOps.CMPEQ) else self.dtype, self.consume_flops() + y.consume_flops() + prod(self.shape), {**self.mem, **y.mem}) for op in BinaryOps},  # noqa: E501
-  **{op:lambda self,axis: FlopCounter(tuple(1 if i in axis else s for i,s in enumerate(self.shape)), self.dtype, self.consume_flops() + prod(self.shape), self.mem) for op in ReduceOps},  # noqa: E501
-  TernaryOps.WHERE: lambda self,y,z: FlopCounter(self.shape, y.dtype, self.consume_flops() + y.consume_flops() + z.consume_flops() + prod(self.shape), {**self.mem, **y.mem, **z.mem})}  # noqa: E501
-
-@functools.lru_cache(None)
-def get_lazyop_info(ast:LazyOp) -> FlopCounter:
-  @functools.lru_cache(None) # NOTE: this cache needs to be recreated for new ASTs
-  def run_ast(ast): return InterpretedFlopCounter[ast.op](*([run_ast(x) for x in ast.src]+([ast.arg] if ast.arg is not None else [])))
-  return run_ast(ast)
 
 # **************** ops in python ****************
 

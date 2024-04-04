@@ -2,13 +2,7 @@ import unittest
 from tinygrad import Tensor, Device
 from tinygrad.engine.schedule import create_schedule
 
-# TODO: can copy this in here when we remove it
-#from tinygrad.ops import get_lazyop_info
-#info = get_lazyop_info(ast)
-#print(ops, mem, expected_mem)
-#print(info.flops, info.mem_estimate)
-
-# **************** new FlopCounter ****************
+# **************** FlopCounter ****************
 
 def get_stats(x:Tensor):
   si = create_schedule([x.lazydata])[-1]
