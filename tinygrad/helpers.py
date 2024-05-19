@@ -14,6 +14,7 @@ def prod(x:Iterable[T]) -> Union[T,int]: return functools.reduce(operator.mul, x
 
 # NOTE: helpers is not allowed to import from anything else in tinygrad
 OSX = platform.system() == "Darwin"
+ARM = os.uname().machine == "arm64"
 CI = os.getenv("CI", "") != ""
 
 def dedup(x:Iterable[T]): return list(dict.fromkeys(x))   # retains list order
