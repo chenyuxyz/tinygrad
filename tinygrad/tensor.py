@@ -2427,7 +2427,7 @@ class Tensor:
     # we need 0 to be positive so we need to correct base_sign when the base is 0
     base_sign = base_sign - (1.5 * (1 - (base.sign().abs())))
     # inject nan if the base is negative and the exponent is not an integer
-    to_nan = (exponent != exponent.trunc()).detach() * base_sign
+    to_nan = (exponent != exponent.trunc()) * base_sign
     inject_nan = (-to_nan * 2 + 1).log().add(1)
     return ret.mul(sign * base_sign + (1 - base_sign)).mul(inject_nan)
 
@@ -2442,7 +2442,7 @@ class Tensor:
     print(Tensor([-1, 2, 3]).maximum(Tensor([-4, -2, 9])).numpy())
     ```
     """
-    return (self<x).detach().where(x, (self==x).detach().where(((self * 0.5 + x * 0.5).cast(self.dtype)), self))
+    return (self<x).where(x, (self==x).where(((self * 0.5 + x * 0.5).cast(self.dtype)), self))
 
   def minimum(self, x:Union[Tensor, ConstType]) -> Tensor:
     """
