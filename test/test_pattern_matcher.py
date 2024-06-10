@@ -66,7 +66,7 @@ class TestPatternMatcher(unittest.TestCase):
   def test_dup_name(self):
     matcher = PatternMatcher([(UPat(UOps.ALU, name="x", vin=(UPat(UOps.CONST, name="y"), UPat(UOps.CONST, name="y"))), lambda x, y: x)])
     y1 = UOp(UOps.CONST, dtypes.float, arg=1.0)
-    y2 = UOp(UOps.CONST, dtypes.float, arg=1.0)
+    y2 = UOp(UOps.CONST, dtypes.float, arg=2.0)
     c1 = UOp(UOps.ALU, dtypes.float, (y1, y1), BinaryOps.ADD)
     c2 = UOp(UOps.ALU, dtypes.float, (y1, y2), BinaryOps.ADD)
     self.assertEqual(matcher.rewrite(c1), c1)

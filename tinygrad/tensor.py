@@ -1359,7 +1359,8 @@ class Tensor:
     """
     squares = (self - self.mean(axis=axis, keepdim=True)).square()
     n = prod([si for si, so in zip(self.shape, squares.sum(axis=axis, keepdim=True).shape) if si != so])
-    return squares.sum(axis=axis, keepdim=keepdim).div(max(0, n-correction))
+    print(f"{n=}, {correction=}, {n-correction=}")
+    return squares.sum(axis=axis, keepdim=keepdim).div(n-correction) if n > correction else squares.sum(axis=axis, keepdim=keepdim).zeros_like()
 
   def std(self, axis=None, keepdim=False, correction=1):
     """
