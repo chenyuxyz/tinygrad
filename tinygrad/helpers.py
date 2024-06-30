@@ -290,6 +290,8 @@ class tqdm:
       self.update(1)
     self.update(close=True)
   def set_description(self, desc:str): self.desc = f"{desc}: " if desc else ""
+  @classmethod
+  def write(self, s): print(f"\r\033[K{s}", file=sys.stderr)
   def update(self, n:int=0, close:bool=False):
     self.n, self.i = self.n+n, self.i+1
     if self.dis or (not close and self.i % self.skip != 0): return
@@ -303,7 +305,7 @@ class tqdm:
     suf = f'{unit_text} [{tm}, {it_text}{self.unit}/s]'
     sz = max(ncols-len(self.desc)-5-2-len(suf), 1)
     bar = '\r' + self.desc + (f'{100*prog:3.0f}%|{("█"*int(num:=sz*prog)+" ▏▎▍▌▋▊▉"[int(8*num)%8].strip()).ljust(sz," ")}| ' if self.t else '') + suf
-    print(bar[:ncols+1],flush=True,end='\n'*close,file=sys.stderr)
+    print(bar[:ncols+1], flush=True, end='\n'*close, file=sys.stderr)
 
 class trange(tqdm):
   def __init__(self, n:int, **kwargs): super().__init__(iterable=range(n), total=n, **kwargs)

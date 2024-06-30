@@ -209,6 +209,19 @@ class TestProgressBar(unittest.TestCase):
           self.assertEqual(tinytqdm_output, tqdm_output)
           if n > 5: break
 
+  @patch('sys.stderr', new_callable=StringIO)
+  @patch('shutil.get_terminal_size')
+  def test_tqdm_write(self, mock_terminal_size, mock_stderr):
+    ncols = random.randint(80, 120)
+    mock_terminal_size.return_value = namedtuple(field_names='columns', typename='terminal_size')(ncols)
+    mock_stderr.truncate(0)
+    for i in tinytqdm(range(10)):
+      time.sleep(0.01)
+      tinytqdm.write(str(i))
+    tinytqdm_output = mock_stderr.getvalue()
+    # TODO: compare this properly
+    print(tinytqdm_output)
+
   def test_tqdm_perf(self):
     st = time.perf_counter()
     for _ in tqdm(range(100)): time.sleep(0.01)
