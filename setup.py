@@ -25,7 +25,7 @@ setup(name='tinygrad',
                         "pyobjc-framework-libdispatch; platform_system=='Darwin'"],
       python_requires='>=3.8',
       extras_require={
-        'llvm': ["llvmlite"],
+        'llvm': ["llvmlite>=0.43.0"],
         'arm': ["unicorn"],
         'triton': ["triton-nightly>=2.1.0.dev20231014192330"],
         'linting': [
