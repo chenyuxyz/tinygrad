@@ -3,9 +3,8 @@ from typing import List, Tuple
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from tqdm import tqdm
 from tinygrad import dtypes, Tensor
-from tinygrad.helpers import getenv, prod, Context, round_up
+from tinygrad.helpers import getenv, prod, Context, round_up, tqdm
 from collections import deque
 from multiprocessing import Queue, Process, shared_memory, connection, Lock, cpu_count, Pool
 
