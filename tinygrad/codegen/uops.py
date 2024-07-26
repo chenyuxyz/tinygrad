@@ -86,6 +86,12 @@ class UOp:
   def var(name:Optional[str]=None, dtype:Optional[DType]=None): return UOp(UOps.VAR, dtype=dtype, arg=name)
   @staticmethod
   def cvar(name:Optional[str]=None, dtype:Optional[DType]=None): return UOp(UOps.CONST, dtype=dtype).name(name)
+  def _flatten_alu(self, depth, uops):
+    if self.op is not UOps.ALU or self.arg is not uops or depth == 0: yield self
+    else:
+      for src in self.src: yield from src._flatten_alu(uops, depth-1)
+  @functools.lru_cache(maxsize=None)  # pylint: disable=method-cache-max-size-none
+  def flatten_add(self, depth) -> List[UOp]: return list(self._flatten_alu(depth, BinaryOps.ADD))
   @functools.cached_property
   def parents(self) -> Set[UOp]: return set.union(set(self.src), *[x.parents for x in self.src])
   @property  # parents with self
