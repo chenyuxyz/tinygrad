@@ -229,6 +229,8 @@ def type_verify(uops):
       elif arg == TernaryOps.WHERE:
         assert src[0].dtype == dtypes.bool, f"{arg} selector dtype mismatch {src[0].dtype=} != {dtypes.bool}"
         assert dtype == src[1].dtype == src[2].dtype, f"{arg} choice dtype mismatch {dtype=} != {src[1].dtype=} != {src[2].dtype=}"
+      if dtypes.is_int(dtype) and not dtypes.is_unsigned(dtype):
+        assert dtypes.min(dtype) <= u.vmin.arg <= u.vmax.arg <= dtypes.max(dtype), f"{u.vmin.arg=}, {u.vmax.arg=} out of bound of {dtype=}"
 
 def uop_alu_resolve(u:UOp) -> sint:
   if u.op in {UOps.CONST, UOps.DEFINE_VAR}: return u.arg
