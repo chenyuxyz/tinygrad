@@ -177,7 +177,7 @@ def create_lt_node(lhs:Node, b:Union[Node, int]):
     return create_node(LtNode(lhs.a*sgn, (b + abs(lhs.b) - 1)//abs(lhs.b)))
   return create_node(LtNode(lhs, b))
 
-def create_ge_node(lhs:Node, b:Union[Node, int]): return create_lt_node(-lhs, -b+1)
+def create_ge_node(lhs:Node, b:Union[Node, int]): return create_lt_node(NumNode(b-1) if isinstance(b,int) else b-1, lhs)
 
 class OpNode(Node):
   def __init__(self, a:Node, b:Union[Node, int]):
