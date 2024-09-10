@@ -452,6 +452,7 @@ class UOp(MathTrait):
         if s1.arg < 0: return -(s0.vmax//-s1.arg), -(s0.vmin//-s1.arg)
       if self.arg is BinaryOps.MAX: return max(s0.vmin, s1.vmin), max(s0.vmax, s1.vmax)
       if self.arg is BinaryOps.CMPLT: return (s0.vmax<s1.vmin, s0.vmin<s1.vmax)
+      if self.arg is UnaryOps.EXP2: return 2**s0.vmin, 2**s0.vmax
     return dtypes.min(cast(DType, self.dtype)), dtypes.max(cast(DType, self.dtype))
 
 @dataclass(frozen=True)
