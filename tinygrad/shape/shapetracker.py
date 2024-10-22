@@ -5,7 +5,7 @@ from typing import Tuple, List, Optional, Dict, Set
 from tinygrad.helpers import merge_dicts, getenv
 from tinygrad.shape.view import View, strides_for_shape
 from tinygrad.dtype import dtypes
-from tinygrad.ops import UOp, UOps, BinaryOps, graph_rewrite, split_uop, symbolic_flat, Variable, sint
+from tinygrad.ops import UOp, UOps, BinaryOps, graph_rewrite, split_uop, symbolic_flat, Variable, sint, uop_given_valid
 
 @dataclass(frozen=True)
 class ShapeTracker:
@@ -70,7 +70,7 @@ class ShapeTracker:
     return ShapeTracker(tuple(unbound_views)), merge_dicts(var_vals)
 
   # NOTE: if a stride is not always valid, it will be None
-  def real_strides(self, ignore_valid=False) -> Tuple[Optional[sint], ...]:
+  def old_real_strides(self, ignore_valid=False) -> Tuple[Optional[sint], ...]:
     if len(self.views) == 1 and self.views[-1].mask is None: return self.views[-1].strides
     ret: List[Optional[sint]] = [None] * len(self.shape)
     idx, valid = self.to_indexed_uops()
@@ -84,6 +84,27 @@ class ShapeTracker:
     if not ignore_valid:
       masked_axis = [x.arg for x in graph_rewrite(valid, symbolic_flat).sparents if x.op is UOps.RANGE]
       ret = [None if i in masked_axis else x for i,x in enumerate(ret)]
+    return tuple(ret)
+
+  # NOTE: if a stride is not always valid, it will be None
+  def real_strides(self, ignore_valid=False) -> Tuple[Optional[sint], ...]:
+    if len(self.views) == 1 and self.views[-1].mask is None: return self.views[-1].strides
+    ret: List[Optional[sint]] = [None] * len(self.shape)
+    idx, valid = self.to_indexed_uops()
+    idx = graph_rewrite(idx, symbolic_flat)
+    valid = graph_rewrite(valid, symbolic_flat)
+    if (newidx:=uop_given_valid(valid, idx)) is not None: idx = newidx
+    for c in split_uop(idx, BinaryOps.ADD):
+      if c.op is UOps.RANGE: ret[c.arg] = 1
+      if c.op is UOps.ALU and c.arg is BinaryOps.MUL and c.src[0].op is UOps.RANGE and c.src[1].op is UOps.CONST: ret[c.src[0].arg] = c.src[1].arg
+      if c.op is UOps.ALU and c.arg is BinaryOps.MUL and c.src[1].op is UOps.RANGE and c.src[0].op is UOps.CONST: ret[c.src[1].arg] = c.src[0].arg
+    used_ranges = [x.arg for x in graph_rewrite(idx, symbolic_flat).sparents if x.op is UOps.RANGE]
+    ret = [x if i in used_ranges else 0 for i,x in enumerate(ret)]
+    if not ignore_valid:
+      masked_axis = [x.arg for x in graph_rewrite(valid, symbolic_flat).sparents if x.op is UOps.RANGE]
+      ret = [None if i in masked_axis else x for i,x in enumerate(ret)]
+    if tuple(ret) != self.old_real_strides(ignore_valid):
+      raise ValueError(f"diff result for {self=}\n{tuple(ret)=}\n{self.old_real_strides(ignore_valid)=}")
     return tuple(ret)
 
   def unit_stride_axes(self, ignore_valid=False) -> List[int]: return [i for i,st in enumerate(self.real_strides(ignore_valid)) if st == 1]

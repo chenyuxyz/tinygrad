@@ -144,6 +144,24 @@ class TestRealSimplifies(unittest.TestCase):
       View.create((8, 3, 3, 11, 2, 28), (924, 308, 0, 28, 0, 1), 0, None),
       View.create((8, 1, 6, 10, 28, 3, 2, 1), (5544, 0, 0, 56, 1, 1848, 672, 0), 0, None)))
 
+  @unittest.skip("broken now")
+  def test_3(self):
+    self.st = ShapeTracker((
+      View.create((28,), (1,), 0, ((0, 14),)),
+      View.create((27,), (1,), 0, None)))
+
+  @unittest.skip("broken now")
+  def test_4(self):
+    self.st = ShapeTracker((
+      View.create((2,), (0,), 0, ((1, 2),)),
+      View.create((1,), (0,), 0, None)))
+
+  @unittest.skip("broken now")
+  def test_5(self):
+    self.st = ShapeTracker((
+      View.create((6,), (1,), -3, ((3, 6),)),
+      View.create((5,), (1,), 0, None)))
+
 class TestViewMinify(unittest.TestCase):
   def test_minifies(self):
     assert len(View.create((10,10)).minify().shape) == 1
