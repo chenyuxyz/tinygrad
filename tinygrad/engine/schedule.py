@@ -246,17 +246,15 @@ def create_schedule_with_vars(outs:List[LazyBuffer]) -> Tuple[List[ScheduleItem]
   # split realizes into small graphs
   graph_rewrite(big_graph, break_sched, realizes:={(u:=ctx.buf_uops[b]):u for b in lazybufs_to_realize})
   assigned = {ubuf for x in assigns if (ubuf:=ctx.buf_uops.get(x.buffer)) is not None}
-  small_graphs: List[Tuple[UOp, ScheduleItemContext]] = []
-  metadata: List[Set[Metadata]] = []
+  small_graphs: List[Tuple[Tuple[UOp, ScheduleItemContext], Tuple[Metadata, ...]]] = []
   for stores in store_groups:
     sink = UOp.sink(*(realizes[u] for u in stores))
-    metadata.append({mx for x in sink.sparents if x.op in BUFFER_UOPS and len(x.src) > 2 and (mx:=ctx.ubuf_metadata.get(x.src[0]))})
-    small_graphs.append(full_ast_rewrite(sink, ctx.var_vals, assigned))
+    metadata = tuple({mx for x in sink.sparents if x.op in BUFFER_UOPS and len(x.src) > 2 and (mx:=ctx.ubuf_metadata.get(x.src[0]))})
+    small_graphs.append((full_ast_rewrite(sink, ctx.var_vals, assigned), metadata))
 
   # do BFS
   bufs = list(ctx.buf_uops)
-  prescheduled = [ScheduleItem(u, tuple(b for u in c.bufs if (b:=bufs[u.arg[0]]).size != 0),
-                               tuple(m), tuple(c.assign_preloads)) for (u,c),m in zip(small_graphs, metadata)]
+  prescheduled = [ScheduleItem(u, tuple(b for u in c.bufs if (b:=bufs[u.arg[0]]).size != 0), m, tuple(c.assign_preloads)) for (u,c),m in small_graphs]
   schedule_targets = {out:si for si in prescheduled for out in si.outputs}
   graph: DefaultDict[ScheduleItem, List[ScheduleItem]] = defaultdict(list)
   in_degree: DefaultDict[ScheduleItem, int] = defaultdict(int)
