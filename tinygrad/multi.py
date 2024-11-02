@@ -46,6 +46,12 @@ def to_sharded(lbs:List[LazyBuffer], axis:int, bounds: Tuple[Tuple[int, int], ..
   if DEBUG >= 3 and lbs[0].shape[axis] % len(lbs) != 0: print(f"multi axis uneven: {lbs[0].shape=} {axis=} {len(lbs)=}, bounds={bounds}")
   return [lb.shrink(tuple((0,s) if a != axis else bound for a,s in enumerate(lb.shape))) for i, (bound, lb) in enumerate(zip(bounds, lbs))]
 
+def copy_multi(lb:LazyBuffer, devices:Tuple[str, ...]) -> List[LazyBuffer]:
+  # return the copyed lazybuffers, one for each device in devices
+  ret = [lb.copy_to_device(devices[0], force=True)] if devices else []
+  while len(ret) < len(devices): ret.extend([rlb.copy_to_device(device, force=True) for rlb, device in zip(ret, devices[len(ret):])])
+  return ret
+
 class MultiLazyBuffer(MathTrait):
   def __init__(self, lbs:List[LazyBuffer], axis:Optional[int], real:Optional[List[bool]]=None):
     assert all(isinstance(x, LazyBuffer) for x in lbs) and len(lbs), "all lbs must be LazyBuffers, and we need at least one of them"
@@ -69,8 +75,8 @@ class MultiLazyBuffer(MathTrait):
   @staticmethod
   def from_sharded(lb:LazyBuffer, devices:Tuple[str, ...], axis:Optional[int], bounds:Optional[Tuple[Tuple[int, int], ...]]):
     assert (axis is None) == (bounds is None), "must specify bounds iff axis is specified"
-    lbs = [lb] * len(devices)
-    sharded_lbs = [lb.copy_to_device(d) for lb,d in zip(to_sharded(lbs, axis, bounds) if axis is not None and bounds is not None else lbs, devices)]
+    if axis is None or bounds is None: sharded_lbs = copy_multi(lb, devices)
+    else: sharded_lbs = [lb.copy_to_device(d) for lb,d in zip(to_sharded([lb] * len(devices), axis, bounds), devices)]
     return MultiLazyBuffer([lb if lb.is_unrealized_unmasked_const() else lb.contiguous(allow_buffer_view=False) for lb in sharded_lbs], axis)
 
   def copy_to_device(self, device:str) -> LazyBuffer:
