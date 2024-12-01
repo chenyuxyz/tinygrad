@@ -168,7 +168,7 @@ class View:
 
     # Project vm1's offset and strides on to vm2.
     origin = un1d(vm2.shape, vm1.offset)
-    terms: List[List[Tuple[int, sint]]] = [[] for _ in origin]
+    terms: List[List[Tuple[int, sint]]] = [[] for _ in vm2.shape]
     strides: List[sint] = [0] * len(vm1.shape)
     for d1, st in enumerate(vm1.strides):
       if st == 0: continue
