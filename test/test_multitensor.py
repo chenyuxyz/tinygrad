@@ -1,4 +1,5 @@
 import unittest, functools, random
+from collections import defaultdict
 from typing import List
 from tinygrad import Tensor, Device, nn, GlobalCounters, TinyJit, dtypes
 from tinygrad.ops import Ops
@@ -175,6 +176,15 @@ class TestMultiTensor(unittest.TestCase):
     with Context(RING=2):
       a,b = _test_allreduce(Tensor.rand(256, 256))
       np.testing.assert_almost_equal(a.numpy(), b.numpy(), decimal=5)
+
+  def test_copy_send_numbers(self):
+    # copy to N device, the busiest source send at most ceil(log2(N+1)) copy
+    a = Tensor.rand(10).realize()
+    devices = tuple(f"{Device.DEFAULT}:{i}" for i in range(15))
+    schedule = [s for s in a.to(devices).schedule_with_vars()[0] if s.ast.op is UOps.COPY]
+    src_dest = defaultdict(list)
+    for s in schedule: src_dest[s.bufs[1].device].append(s.bufs[0].device)
+    self.assertEqual(max([len(v) for v in src_dest.values()]), 4)
 
   def test_copy_jit(self):
     @TinyJit
