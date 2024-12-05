@@ -85,8 +85,6 @@ class LLVMRenderer(Renderer):
     (UPat(Ops.RECIP, name="x"), lambda x: UOp(Ops.FDIV, x.dtype, (x.const_like(1), x.src[0]))),
     # rewrite cast to bool to CMPNE 0
     (UPat(Ops.CAST, dtype=dtypes.bool, name="x"), lambda x: x.src[0] != x.src[0].const_like(0)),
-    # rewrite MAX to CMPLT + WHERE
-    (UPat(Ops.MAX, name="m"), lambda m: (m.src[0] < m.src[1]).where(m.src[1], m.src[0])),
   ])
 
   def render(self, name: str, uops: List[UOp]) -> str:
