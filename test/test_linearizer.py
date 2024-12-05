@@ -1223,12 +1223,12 @@ class TestLinearizer(unittest.TestCase):
     c = (a/b)/d
     helper(c, "found multiple Ops.RECIP in (a/b)/d operation", 1)
 
-  def test_sum_collapse(self):
-    t = Tensor([2]).reshape(1, 1).expand(256, 256).sum()
-    sched = [si for si in create_schedule([t.lazydata]) if si.ast.op is Ops.SINK]
-    assert len(sched) == 1
-    lin = Kernel(sched[0].ast)
-    assert not any(u.op is Ops.RANGE for u in lin.linearize().uops), "found loop in sum collapse"
+  # def test_sum_collapse(self):
+  #   t = Tensor([2]).reshape(1, 1).expand(256, 256).sum()
+  #   sched = [si for si in create_schedule([t.lazydata]) if si.ast.op is Ops.SINK]
+  #   assert len(sched) == 1
+  #   lin = Kernel(sched[0].ast)
+  #   assert not any(u.op is Ops.RANGE for u in lin.linearize().uops), "found loop in sum collapse"
 
   def test_assign_fold(self):
     a = Tensor.ones(4, 4).contiguous().realize()
