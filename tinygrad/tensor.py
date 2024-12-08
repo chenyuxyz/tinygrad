@@ -1860,7 +1860,8 @@ class Tensor(SimpleMathTrait):
     """
     if axis is None: return self.flatten().argmax(0)
     axis = self._resolve_dim(axis)
-    m = self == self.max(axis=axis, keepdim=True)
+    # without contiguous this fails?
+    m = self == self.contiguous().max(axis=axis, keepdim=True)
     idx = m * Tensor.arange(self.shape[axis],0,-1, requires_grad=False, device=self.device).reshape(self.shape[axis], *[1]*(self.ndim-axis-1))
     return (self.shape[axis]-idx.max(axis=axis, keepdim=keepdim)).cast(dtypes.int32)
 
@@ -1885,7 +1886,7 @@ class Tensor(SimpleMathTrait):
     print(t.argmin(axis=1).numpy()) # Returns the indices of the minimum values along axis 1.
     ```
     """
-    return (-self).argmax(axis=axis, keepdim=keepdim)
+    return (-self if self.is_floating_point() else ~self).argmax(axis=axis, keepdim=keepdim)
 
   def rearrange(self, formula: str, **sizes) -> Tensor:
     """
