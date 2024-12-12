@@ -322,8 +322,8 @@ class View:
     strides, r_new_shape = [], reversed(new_shape)
     for merged_dim, new_stride, real_dim in reversed(merge_dims(self.shape, self.strides, self.mask)):
       acc = 1
-      # TODO: third resolve shouldn't be needed
-      while resolve(acc <= merged_dim) and resolve(acc != merged_dim) and resolve((new_dim := next(r_new_shape, 0)) > 0):
+      # TODO: second resolve shouldn't be needed
+      while resolve(acc < merged_dim, False) and resolve((new_dim := next(r_new_shape, 0)) > 0):
         strides.append(new_stride)
         if resolve(new_dim != 1): new_stride *= (new_dim if resolve((acc := acc * new_dim) < real_dim) else 0)
       if resolve(acc != merged_dim): return None
