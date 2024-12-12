@@ -66,9 +66,7 @@ class Buffer:
       self._base = None
       self._lb_refcount = lb_refcount
       if opaque is not None: self.allocate(opaque)
-      if initial_value is not None:
-        self.allocate()
-        self.copyin(memoryview(initial_value))
+      if initial_value is not None: self.allocate().copyin(memoryview(initial_value))
     else:
       assert base._base is None, "base can't have a base"
       assert device == base.device, "base must have the same device"
