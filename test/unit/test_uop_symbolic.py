@@ -496,7 +496,6 @@ class TestSymbolic(unittest.TestCase):
     self.helper_test_variable(aa, 0, 3, "(a if (x<2) else 0)")
     self.helper_test_variable(bb, 0, 3, "(b if (x<2) else 1)")
     self.helper_test_variable(aa+bb, 0, 6, "((a+b) if (x<2) else 1)")
-    self.helper_test_variable(aa.maximum(bb), 0, 3, "(max(a, b) if (x<2) else 1)")
 
     # not combining because it increased total ALU
     c = Variable("c", 0, 3)
