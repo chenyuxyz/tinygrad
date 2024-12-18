@@ -304,7 +304,7 @@ class View:
       if resolve(prod(self.shape) != prod(new_shape), False): raise ValueError(f"size mismatched, can't reshape {self.shape=} -> {new_shape=}")
 
     if 0 in self.shape: return View.create(new_shape)
-    if new_shape == () and self.mask and any(mx==my for (mx,my) in self.mask): return None
+    if new_shape == () and self.mask and any(mx==my for (mx,my) in self.mask): raise
 
     # after the asserts, it's okay to check contiguous
     if self.contiguous: return View.create(new_shape)
