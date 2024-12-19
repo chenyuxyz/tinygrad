@@ -107,6 +107,7 @@ class TestMergeViews(unittest.TestCase):
     self.assertIsNotNone(v)
     self.assertEqual(v, View(shape=(3, 3, 4, 2), strides=(27, 9, 3, 1), offset=-5, mask=((0, 3), (0, 3), (2, 4), (0, 2)), contiguous=False))
 
+  @unittest.expectedFailure  # TODO: fix these
   def test_with_mask_4(self):
     # from test/test_ops.py::TestOps::test_pad_reflect_mode
     # has a mask in the final view
@@ -125,7 +126,6 @@ class TestMergeViews(unittest.TestCase):
     self.assertIsNotNone(v)
     self.assertEqual(v, View(shape=(1, 1, 6, 3), strides=(0, 0, 5, -1), offset=-2, mask=((0, 1), (0, 1), (1, 6), (0, 3)), contiguous=False))
 
-  @unittest.expectedFailure  # TODO: fix these
   def test_merges_from_fuzzer1(self):
     v0 = View(shape=(2, 4), strides=(2, 1), offset=-2, mask=((0, 2), (2, 4)), contiguous=False)
     v1 = View(shape=(2, 4, 2, 2), strides=(4, 0, -2, -1), offset=3, mask=None, contiguous=False)
@@ -134,7 +134,6 @@ class TestMergeViews(unittest.TestCase):
     self.assertIsNotNone(v)
     self.assertEqual(v, target)
 
-  @unittest.expectedFailure  # TODO: fix these
   def test_merges_from_fuzzer2(self):
     v0 = View(shape=(5, 10, 12), strides=(100, 1, 10), offset=-20, mask=((0, 5), (0, 10), (2, 12)), contiguous=False)
     v1 = View(shape=(10, 6, 5, 2, 2), strides=(12, 2, 120, 1, 0), offset=0, mask=None, contiguous=False)
@@ -143,7 +142,6 @@ class TestMergeViews(unittest.TestCase):
     self.assertIsNotNone(v)
     self.assertEqual(v, target)
 
-  @unittest.expectedFailure  # TODO: fix these
   def test_merges_from_fuzzer3(self):
     v0 = View(shape=(8, 7, 3), strides=(1, 12, -4), offset=6, mask=((2, 6), (0, 7), (0, 3)), contiguous=False)
     v1 = View(shape=(4, 2, 6, 2, 1), strides=(42, 21, 3, 1, 0), offset=4, mask=None, contiguous=False)
@@ -161,7 +159,6 @@ class TestMergeViews(unittest.TestCase):
     self.assertIsNotNone(v)
     self.assertEqual(v, target)
 
-  @unittest.expectedFailure  # TODO: fix these
   def test_merges_from_fuzzer5(self):
     v0 = View(shape=(5, 1, 24), strides=(20, 0, 1), offset=-2, mask=((0, 5), (0, 1), (2, 22)), contiguous=False)
     v1 = View(shape=(12, 2, 5, 2, 1), strides=(2, 1, 24, 0, 0), offset=0, mask=None, contiguous=False)

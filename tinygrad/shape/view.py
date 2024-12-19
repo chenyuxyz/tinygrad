@@ -201,11 +201,12 @@ class View:
         if not all_int([o, b, e]):
           bad = True
           continue
-        if len(term) != 1:
-          if not term and newe: newe[0] = 0
-          else: bad = True
-          continue
-        d1, s1 = term[0]
+        idx = 0
+        if len(term) == 0:
+          if newe: newe[0] = 0
+          bad = True
+          break
+        d1, s1 = term[idx]
         if not all_int([s1, newe[d1]]):
           bad = True
           continue
