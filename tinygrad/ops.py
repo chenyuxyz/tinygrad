@@ -1242,6 +1242,11 @@ symbolic = symbolic_simple+PatternMatcher([
    lambda alu,c,t,tt,f,ff: c.where(t.alu(alu.op, tt), f.alu(alu.op, ff)) if t.op == tt.op == Ops.CONST or f.op == ff.op == Ops.CONST else None),
   # ALU min==max -> CONST (slow!)
   (UPat(GroupOp.ALU, name="x"), lambda x: x.const_like(x.vmin) if x.vmin == x.vmax else None),
+  # rewrite where to max
+  ((UPat.var("x") < UPat.var("y")).where(UPat.var("y"), UPat.var("x")), lambda x,y: x.maximum(y)),
+  ((UPat.var("x") <= UPat.var("y")).where(UPat.var("y"), UPat.var("x")), lambda x,y: x.maximum(y)),
+  ((UPat.var("x") < UPat.var("y")).where(UPat.var("x"), UPat.var("y")), lambda x,y: x.minimum(y)),
+  ((UPat.var("x") < UPat.var("y")).where(UPat.var("x"), UPat.var("y")), lambda x,y: x.minimum(y)),
   # max folding
   (UPat.maximum(UPat.var("x"), UPat.var("y")), lambda x,y: x if x.vmin >= y.vmax else y if x.vmax <= y.vmin else None),
   # TODO: why does this rule break beautiful_mnist?
