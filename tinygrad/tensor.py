@@ -3584,7 +3584,8 @@ class Tensor(SimpleMathTrait):
     """
     # NOTE: it also works when `key` and `value` have symbolic shape.
     assert all_int(self.shape), f"does not support symbolic shape {self.shape}"
-    qk = self.matmul(key.transpose(-2,-1), acc_dtype=least_upper_dtype(self.dtype, key.dtype, dtypes.float32)) / math.sqrt(self.shape[-1])
+    acc_dtype = least_upper_dtype(self.dtype, key.dtype, dtypes.float32)
+    qk = self.matmul(key.transpose(-2,-1), acc_dtype=acc_dtype) / math.sqrt(self.shape[-1])
     # handle attention mask
     if is_causal:
       if attn_mask is not None: raise RuntimeError("cannot set attn_mask when is_causal=True")
@@ -3592,7 +3593,7 @@ class Tensor(SimpleMathTrait):
     if attn_mask is not None:
       if attn_mask.dtype == dtypes.bool: attn_mask = attn_mask.where(0, -float("inf"))
       qk = qk + attn_mask
-    return qk.softmax(-1).cast(self.dtype).dropout(dropout_p) @ value
+    return qk.cast(key.dtype).softmax(-1, dtype=acc_dtype).cast(value.dtype).dropout(dropout_p) @ value
 
   def _do_reduction(self, reduction:ReductionStr="mean") -> Tensor:
     if reduction not in get_args(ReductionStr): raise ValueError(f"{reduction=} must be one of {get_args(ReductionStr)}")
