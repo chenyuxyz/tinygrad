@@ -1110,5 +1110,11 @@ class TestTensorOps(unittest.TestCase):
   def test_bitcast(self):
     helper_test_shard_op([(256,), (256,)], lambda x: x.bitcast(dtypes.int))
 
+class TestArange(unittest.TestCase):
+  def test_shard_arange(self):
+    t = Tensor.arange(10).shard(devices_2)
+    s = t.schedule()
+    self.assertEqual(len(s), 2)
+
 if __name__ == '__main__':
   unittest.main()

@@ -490,6 +490,10 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     if not isinstance(size:=prod([x.vmax if isinstance(x, UOp) else x for x in shape]), int): raise ValueError(f"size must be int {size}")
     return UOp.new_buffer(device, size, dtype).reshape(shape)
   def copy_to_device(self, device:str|tuple[str, ...], clone:bool=False) -> UOp:
+    # if it does not depend on Ops.BUFFER (and not clone), replace the device
+    if isinstance(device, str) and isinstance(self.device, str) and device != self.device and \
+      not clone and not any(u.op is Ops.BUFFER for u in self.toposort):
+      return self.substitute({d:d.replace(arg=device) for d in self.toposort if d.op is Ops.DEVICE})
     # if it's a shrink, do the shrink before the copy with CONTIGUOUS
     if prod(self.shape) < prod(self.base.shape): return self.contiguous().copy_to_device(device)
     # COPY is COPY(DEVICE, copyin.base) -> VIEW(copyin.st)
