@@ -135,12 +135,12 @@ class LAMB(Optimizer):
       self.v[i].assign(self.b2 * self.v[i] + (1.0 - self.b2) * (g * g))
       m_hat = self.m[i] / (1.0 - self.b1_t)
       v_hat = self.v[i] / (1.0 - self.b2_t)
-      up = (m_hat / (v_hat.sqrt() + self.eps)) + self.wd * t.detach()
+      up = (m_hat / (v_hat.sqrt() + self.eps)) + self.wd * t
       if not self.adam:
-        r1 = t.detach().square().sum().sqrt()
-        r2 = up.square().sum().sqrt()
-        r = Tensor.where(r1 > 0, Tensor.where(r2 > 0, r1 / r2, 1.0), 1.0)
+        r1 = t.square().sum()
+        r2 = up.square().sum()
+        r = ((r1 > 0) & (r2 > 0)).where((r1 / r2).sqrt(), 1.0)
       else:
         r = 1.0
-      t.assign((t.detach() - self.lr * r * up).cast(t.dtype))
+      t.assign((t - self.lr * r * up).cast(t.dtype).detach())
     return [self.b1_t, self.b2_t] + self.m + self.v
