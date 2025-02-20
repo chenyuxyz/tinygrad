@@ -37,7 +37,7 @@ AMD                 | [1]        | enable AMD backend
 NV                  | [1]        | enable NV backend
 METAL               | [1]        | enable Metal backend (for Mac M1 and after)
 METAL_XCODE         | [1]        | enable Metal using macOS Xcode SDK
-CLANG               | [1]        | enable Clang backend
+CPU                 | [1]        | enable CPU Clang backend
 LLVM                | [1]        | enable LLVM backend
 BEAM                | [#]        | number of beams in kernel beam search
 DEFAULT_FLOAT       | [HALF, ...]| specify the default float dtype (FLOAT32, HALF, BFLOAT16, FLOAT64, ...), default to FLOAT32

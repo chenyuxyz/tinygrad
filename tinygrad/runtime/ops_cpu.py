@@ -18,5 +18,5 @@ class ClangJITCompiler(Compiler):
 
   def disassemble(self, lib:bytes): return capstone_flatdump(lib)
 
-class ClangDevice(Compiled):
+class CPUDevice(Compiled):
   def __init__(self, device:str): super().__init__(device, MallocAllocator, ClangRenderer(), ClangJITCompiler(), CPUProgram)
