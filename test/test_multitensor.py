@@ -61,6 +61,17 @@ class TestMultiTensor(unittest.TestCase):
     with self.assertRaises(RuntimeError):
       X.shard_(devices_3, 0)
 
+  def test_shard_already_multi(self):
+    X = Tensor.ones(256).contiguous().realize()
+    X.shard_(devices_2, 0)
+    with self.assertRaises(RuntimeError):
+      X.shard_(devices_2, 0)
+
+  def test_shard_to_single_device(self):
+    X = Tensor.ones(256).contiguous().realize()
+    with self.assertRaises(ValueError):
+      X.shard_((Device.DEFAULT,), 0)
+
   def test_tensor_from_multi(self):
     X = Tensor([1, 2], dtype=dtypes.int).shard_(devices_2, 0)
     Y = Tensor(X.lazydata)
