@@ -48,7 +48,11 @@ def alu_multi(root:UOp):
   assert all_same([x.device for x in msrcs]), f"all buffers must have the same device {[x.device for x in msrcs]}"
 
   axis = root.axis
-  bounds = dedup([x.bounds for x in root.src if x.axis == axis])[-1] if axis is not None else None
+  try:
+    bounds = dedup([x.bounds for x in root.src if x.axis == axis])[-1] if axis is not None else None
+  except Exception as e:
+    print(f"{root=}")
+    raise e
   srcs:list[list[UOp]] = []
   not_all_real = not all(all(mlb.real) for mlb in msrcs)
   new_real = tuple(all(transposed) for transposed in zip(*[mlb.real for mlb in msrcs])) if not_all_real else msrcs[0].real
