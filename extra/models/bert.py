@@ -168,8 +168,8 @@ class Bert:
     self.encoder = BertEncoder(hidden_size, intermediate_size, num_attention_heads, num_hidden_layers, attention_probs_dropout_prob, hidden_dropout_prob)
 
   def __call__(self, input_ids, attention_mask, token_type_ids):
-    extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-    extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+    # make attention_mask bool here to save memory
+    extended_attention_mask = attention_mask.bool().unsqueeze(1).unsqueeze(2)
 
     embedding_output = self.embeddings(input_ids, token_type_ids)
     encoder_outputs = self.encoder(embedding_output, extended_attention_mask)
@@ -273,6 +273,8 @@ class BertSelfAttention:
     query_layer = self.transpose_for_scores(mixed_query_layer)
     key_layer = self.transpose_for_scores(mixed_key_layer)
     value_layer = self.transpose_for_scores(mixed_value_layer)
+
+    attention_mask = (1.0 - attention_mask) * -10000.0
 
     context_layer = Tensor.scaled_dot_product_attention(query_layer, key_layer, value_layer, attention_mask, self.dropout)
 
