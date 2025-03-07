@@ -695,6 +695,10 @@ def train_bert():
   # ** init model **
 
   model = get_mlperf_bert_model()
+  # TODO: remove this
+  # realize eveything random
+  Tensor.realize(*get_parameters(model))
+
   if RUNMLPERF:
     model.load_from_pretrained(init_ckpt)
   else:
