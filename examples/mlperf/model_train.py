@@ -705,7 +705,7 @@ def train_bert():
   parameters = get_parameters(model)
   if len(GPUS) > 1:
     for p in parameters:
-      p.to_(GPUS)
+      p.realize().to_(GPUS)
 
   # ** Log run config **
   for key, value in config.items(): print(f'HParam: "{key}": {value}')
