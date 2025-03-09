@@ -703,8 +703,9 @@ def train_bert():
       p = p.assign(Tensor.zeros_like(p).contiguous()).realize()
 
   parameters = get_parameters(model)
-  if len(GPUS) > 1:
-    for p in parameters:
+  for p in parameters:
+    p.realize()
+    if len(GPUS) > 1:
       p.to_(GPUS)
 
   # ** Log run config **
