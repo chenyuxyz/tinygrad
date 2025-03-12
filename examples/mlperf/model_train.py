@@ -572,16 +572,20 @@ def train_rnnt():
   pass
 
 @TinyJit
-def train_step_bert(model, optimizer, scheduler, loss_scaler:float, input_ids:Tensor, segment_ids:Tensor, attention_mask:Tensor,
-                    masked_positions:Tensor, masked_lm_ids:Tensor, masked_lm_weights:Tensor, next_sentence_labels:Tensor, GPUS):
-  for t in [input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels]:
-    if len(GPUS) > 1: t.shard_(GPUS, axis=0)
-    else: t.to_(GPUS[0])
+def train_step_bert(model, optimizer, scheduler, loss_scaler:float, input_ids:list[Tensor], segment_ids:list[Tensor], attention_mask:list[Tensor],
+                    masked_positions:list[Tensor], masked_lm_ids:list[Tensor], masked_lm_weights:list[Tensor], next_sentence_labels:list[Tensor],
+                    GPUS):
+  for ts in [input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels]:
+    assert len(ts) == len(input_ids), f"{len(ts)=}, {len(input_ids)=}"
+    for t in ts:
+      if len(GPUS) > 1: t.shard_(GPUS, axis=0)
+      else: t.to_(GPUS[0])
   optimizer.zero_grad()
 
-  lm_logits, seq_relationship_logits = model(input_ids, attention_mask, masked_positions, segment_ids)
-  loss = model.loss(lm_logits, seq_relationship_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels)
-  (loss * loss_scaler).backward()
+  for i in range(len(input_ids)):
+    lm_logits, seq_relationship_logits = model(input_ids[i], attention_mask[i], masked_positions[i], segment_ids[i])
+    loss = model.loss(lm_logits, seq_relationship_logits, masked_lm_ids[i], masked_lm_weights[i], next_sentence_labels[i])
+    (loss * loss_scaler).backward()
 
   global_norm = Tensor([0.0], dtype=dtypes.float32, device=optimizer[0].device).realize()
   for p in optimizer.params:
@@ -656,14 +660,17 @@ def train_bert():
     MLLOGGER = None
 
   # ** hyperparameters **
-  BS                 = config["GLOBAL_BATCH_SIZE"]      = getenv("BS", 11 * len(GPUS) if dtypes.default_float in (dtypes.float16, dtypes.bfloat16) else 8 * len(GPUS))
+  grad_acc_steps     = config["GRADIENT_ACCUMULATION_STEPS"] = getenv("GRADIENT_ACCUMULATION_STEPS", 1)
+  BS                 = getenv("BS", 11 * len(GPUS) if dtypes.default_float in (dtypes.float16, dtypes.bfloat16) else 8 * len(GPUS))
+  global_batch_size  = config["GLOBAL_BATCH_SIZE"] = BS * grad_acc_steps
+
   EVAL_BS            = config["EVAL_BS"]                = getenv("EVAL_BS", 1 * len(GPUS))
   max_lr             = config["OPT_BASE_LEARNING_RATE"] = getenv("OPT_BASE_LEARNING_RATE", 0.0002 * math.sqrt(BS/96))
 
-  train_steps        = config["TRAIN_STEPS"]            = getenv("TRAIN_STEPS", 3630000 // BS)
+  train_steps        = config["TRAIN_STEPS"]            = getenv("TRAIN_STEPS", 3630000 // global_batch_size)
   warmup_steps       = config["NUM_WARMUP_STEPS"]       = getenv("NUM_WARMUP_STEPS", 1)
   max_eval_steps     = config["MAX_EVAL_STEPS"]         = getenv("MAX_EVAL_STEPS", (10000 + EVAL_BS - 1) // EVAL_BS) # EVAL_BS * MAX_EVAL_STEPS >= 10000
-  eval_step_freq     = config["EVAL_STEP_FREQ"]         = getenv("EVAL_STEP_FREQ", int((math.floor(0.05 * (230.23 * BS + 3000000) / 25000) * 25000) / BS)) # Round down
+  eval_step_freq     = config["EVAL_STEP_FREQ"]         = getenv("EVAL_STEP_FREQ", int((math.floor(0.05 * (230.23 * global_batch_size + 3000000) / 25000) * 25000) / global_batch_size)) # Round down
   save_ckpt_freq     = config["SAVE_CKPT_FREQ"]         = getenv("SAVE_CKPT_FREQ", 1000)
   keep_ckpt_amount   = config["KEEP_CKPT_AMOUNT"]       = getenv("KEEP_CKPT_AMOUNT", 5)
   save_ckpt_dir      = config["SAVE_CKPT_DIR"]          = getenv("SAVE_CKPT_DIR", "./ckpts")
@@ -774,7 +781,7 @@ def train_bert():
 
   if RUNMLPERF:
     if MLLOGGER:
-      MLLOGGER.start(key=mllog_constants.EPOCH_START, value=i*BS, metadata={"epoch_num": i*BS})
+      MLLOGGER.start(key=mllog_constants.EPOCH_START, value=i*global_batch_size, metadata={"epoch_num": i*global_batch_size})
 
   while train_data is not None and i < train_steps and not achieved:
     if getenv("TRAIN", 1):
@@ -782,9 +789,15 @@ def train_bert():
       BEAM.value = TRAIN_BEAM
       st = time.perf_counter()
       GlobalCounters.reset()
+      step_data = {k:[v] for k,v in train_data.items()}
+      for _ in range(grad_acc_steps-1):
+        train_data = next(train_it)
+        for k,v in train_data.items():
+          step_data[k].append(v)
+
       loss, global_norm, lr = train_step_bert(model, optimizer_group, scheduler_group, loss_scaler,
-        train_data["input_ids"], train_data["segment_ids"], train_data["input_mask"], train_data["masked_lm_positions"], \
-        train_data["masked_lm_ids"], train_data["masked_lm_weights"], train_data["next_sentence_labels"], GPUS)
+        step_data["input_ids"], step_data["segment_ids"], step_data["input_mask"], step_data["masked_lm_positions"], \
+        step_data["masked_lm_ids"], step_data["masked_lm_weights"], step_data["next_sentence_labels"], GPUS)
 
       pt = time.perf_counter()
 
@@ -824,7 +837,7 @@ def train_bert():
     # ** eval loop **
     if i % eval_step_freq == 0 or (BENCHMARK and i == BENCHMARK) or i == train_steps:
       if MLLOGGER and RUNMLPERF:
-        MLLOGGER.start(key=mllog_constants.EVAL_START, value=None, metadata={"epoch_num": i*BS, "step_num": i})
+        MLLOGGER.start(key=mllog_constants.EVAL_START, value=None, metadata={"epoch_num": i*global_batch_size, "step_num": i})
       if getenv("RESET_STEP", 0): train_step_bert.reset()
       else: train_step_bert.captured.free_intermediates()
       eval_lm_losses = []
@@ -876,8 +889,8 @@ def train_bert():
                     "eval/clsf_accuracy": avg_clsf_acc, "eval/forward_time": avg_fw_time})
 
       if MLLOGGER and RUNMLPERF:
-        MLLOGGER.end(key=mllog_constants.EVAL_STOP, value=i*BS, metadata={"epoch_count": i*BS, "step_num": i, "samples_count": config["EVAL_BS"] * config["MAX_EVAL_STEPS"]})
-        MLLOGGER.event(key=mllog_constants.EVAL_ACCURACY, value=avg_lm_acc, metadata={"epoch_num": i*BS, "masked_lm_accuracy": avg_lm_acc})
+        MLLOGGER.end(key=mllog_constants.EVAL_STOP, value=i*global_batch_size, metadata={"epoch_count": i*global_batch_size, "step_num": i, "samples_count": config["EVAL_BS"] * config["MAX_EVAL_STEPS"]})
+        MLLOGGER.event(key=mllog_constants.EVAL_ACCURACY, value=avg_lm_acc, metadata={"epoch_num": i*global_batch_size, "masked_lm_accuracy": avg_lm_acc})
 
       # save model if achieved target
       if not achieved and avg_lm_acc >= target:
@@ -892,10 +905,10 @@ def train_bert():
         hours = int(total_seconds // 3600)
         minutes = int((total_seconds % 3600) // 60)
         seconds = total_seconds % 60
-        print(f"Reference Convergence point reached after {i * BS} datasamples and {hours}h{minutes}m{seconds:.2f}s.")
+        print(f"Reference Convergence point reached after {i * global_batch_size} datasamples and {hours}h{minutes}m{seconds:.2f}s.")
         achieved = True
         if MLLOGGER and RUNMLPERF:
-          MLLOGGER.event(key=mllog_constants.EPOCH_STOP, value=i*BS, metadata={"epoch_num": i*BS})
+          MLLOGGER.event(key=mllog_constants.EPOCH_STOP, value=i*global_batch_size, metadata={"epoch_num": i*global_batch_size})
           MLLOGGER.end(key=mllog_constants.RUN_STOP, metadata=dict(status=mllog_constants.SUCCESS))
         # stop once hitting the target
         break
@@ -920,7 +933,7 @@ def train_bert():
         os.remove(os.path.join(ckpt_dir, last))
       if MLLOGGER and RUNMLPERF:
         MLLOGGER.end(key="checkpoint_stop", value=None, metadata={"step_num": i})
-        MLLOGGER.start(key=mllog_constants.BLOCK_START, value=None, metadata={"first_epoch_num": 1, "epoch_num": 1, "epoch_count": 1, "samples_count": i * BS, "step_num": i, "first_step_num": i+1})
+        MLLOGGER.start(key=mllog_constants.BLOCK_START, value=None, metadata={"first_epoch_num": 1, "epoch_num": 1, "epoch_count": 1, "samples_count": i * global_batch_size, "step_num": i, "first_step_num": i+1})
         previous_step = i
 
 def train_maskrcnn():
