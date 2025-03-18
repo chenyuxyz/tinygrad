@@ -2,7 +2,7 @@ import math
 from typing import Union
 
 from tinygrad import Tensor, nn, dtypes
-from tinygrad.helpers import prod, argfix
+from tinygrad.helpers import prod, argfix, round_up
 
 # rejection sampling truncated randn
 def rand_truncn(*shape, dtype=None, truncstds=2, **kwargs) -> Tensor:
@@ -46,13 +46,16 @@ class LinearBert(nn.Linear):
 class EmbeddingBert(nn.Embedding):
   def __init__(self, vocab_size:int, embed_size:int, std=0.02):
     self.vocab_sz, self.embed_sz = vocab_size, embed_size
-    self.weight = std * rand_truncn(vocab_size, embed_size, dtype=dtypes.float32)
+    self.padded_vocab_sz = round_up(vocab_size, 32)
+    self.weight = std * rand_truncn(self.vocab_sz , embed_size, dtype=dtypes.float32)
 
   def __call__(self, idx:Tensor) -> Tensor:
     if idx.numel() == 0: return Tensor.empty(idx.shape+(self.embed_sz,), dtype=self.weight.dtype, device=self.weight.device)
-    arange_shp, weight_shp, big_shp = (1, 1, self.vocab_sz, 1), (1, 1, self.vocab_sz, self.embed_sz), idx.shape+(self.vocab_sz, self.embed_sz,)
-    if not hasattr(self, 'arange'): self.arange = Tensor.arange(self.vocab_sz, requires_grad=False, device=self.weight.device).reshape(arange_shp)
-    arange, idx, vals = self.arange.expand(big_shp), idx.reshape(idx.shape+(1, 1,)).expand(big_shp), self.weight.cast(dtypes.default_float).reshape(weight_shp).expand(big_shp)
+    arange_shp, weight_shp, big_shp = (1, 1, self.padded_vocab_sz, 1), (1, 1, self.padded_vocab_sz, self.embed_sz), idx.shape+(self.padded_vocab_sz, self.embed_sz,)
+    if not hasattr(self, 'arange'): self.arange = Tensor.arange(self.padded_vocab_sz, requires_grad=False, device=self.weight.device).reshape(arange_shp)
+    arange = self.arange.expand(big_shp)
+    idx = idx.reshape(idx.shape+(1, 1,)).expand(big_shp)
+    vals = self.weight.pad(((0, self.padded_vocab_sz-self.vocab_sz), None)).reshape(weight_shp).expand(big_shp).cast(dtypes.default_float)
     return (arange == idx).mul(vals).sum(2, dtype=vals.dtype)
 
 class LayerNormBert:
