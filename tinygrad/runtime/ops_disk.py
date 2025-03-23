@@ -1,6 +1,6 @@
 import os, sys, mmap, io, ctypes, ctypes.util, contextlib
 from typing import Optional, Generator, Callable
-from tinygrad.helpers import OSX, round_up
+from tinygrad.helpers import OSX, WINDOWS, round_up
 from tinygrad.device import Compiled, Allocator
 with contextlib.suppress(ImportError):
   import _posixshmem
@@ -23,7 +23,7 @@ class DiskDevice(Compiled):
     filename = self.device[len("disk:"):]
     self.size = size
 
-    if sys.platform != "win32" and filename.startswith("shm:"):
+    if not WINDOWS and filename.startswith("shm:"):
       fd = _posixshmem.shm_open("/"+filename[4:].lstrip("/"), os.O_RDWR, 0o600)
       self.mem = mmap.mmap(fd, self.size, mmap.MAP_SHARED | MAP_POPULATE | MAP_LOCKED)
       os.close(fd)

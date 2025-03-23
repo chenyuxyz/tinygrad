@@ -1,8 +1,8 @@
 from typing import Optional, Union, Literal, Callable, cast
-import os, math, sys
+import os, math
 from collections import defaultdict, Counter
 from tinygrad.ops import GroupOp, Ops, UOp, PatternMatcher, UPat
-from tinygrad.helpers import strip_parens, getenv, prod, dedup, AMX
+from tinygrad.helpers import strip_parens, getenv, prod, dedup, AMX, WINDOWS
 from tinygrad.dtype import ImageDType, dtypes, DType, PtrDType
 from tinygrad.renderer import Renderer, TensorCore
 from tinygrad.codegen.devectorizer import no_vectorized_alu
@@ -195,8 +195,8 @@ class ClangRenderer(CStyleLanguage):
   extra_matcher = PatternMatcher([(UPat.var("x", dtypes.float64).cast(dtypes.float16), lambda x: x.cast(dtypes.float32).cast(dtypes.float16)),
     (UPat(Ops.SQRT, name="alu"), no_vectorized_alu),]) + CStyleLanguage.extra_matcher
 
-  if sys.platform == 'win32':
-    kernel_prefix = "__attribute__((ms_abi)) "
+  if WINDOWS: kernel_prefix = "__attribute__((ms_abi)) "
+
   def render_vector_prefix(self, dt:DType) -> str:
     # round (down) to power of two (this is actually the default clang behavior)
     alignment = 2**int(math.log2(dt.itemsize)) if getenv("ALIGNED", 1) else 1

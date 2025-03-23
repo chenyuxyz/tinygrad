@@ -1,6 +1,5 @@
 from __future__ import annotations
-import os, ctypes, functools, mmap, struct, array, math, sys
-assert sys.platform != 'win32'
+import os, ctypes, functools, mmap, struct, array, math
 from types import SimpleNamespace
 from typing import Any, cast, ClassVar
 from tinygrad.device import BufferSpec
@@ -9,8 +8,9 @@ from tinygrad.runtime.support.hcq import HWInterface
 from tinygrad.runtime.autogen import kgsl, adreno
 from tinygrad.runtime.ops_gpu import CLCompiler, CLDevice
 from tinygrad.renderer.cstyle import QCOMRenderer
-from tinygrad.helpers import getenv, mv_address, to_mv, round_up, data64_le, prod, fromimport
+from tinygrad.helpers import getenv, mv_address, to_mv, round_up, data64_le, prod, fromimport, WINDOWS
 if getenv("IOCTL"): import extra.qcom_gpu_driver.opencl_ioctl  # noqa: F401  # pylint: disable=unused-import
+assert not WINDOWS
 
 BUFTYPE_BUF, BUFTYPE_TEX, BUFTYPE_IBO = 0, 1, 2
 

@@ -1,10 +1,10 @@
 from typing import cast
-import math, struct, sys
+import math, struct
 from tinygrad.renderer import Renderer
 from tinygrad.renderer.cstyle import ClangRenderer
 from tinygrad.ops import UOp, PatternMatcher, UPat, Ops, GroupOp
 from tinygrad.dtype import dtypes, DType, PtrDType, truncate
-from tinygrad.helpers import prod, AMX
+from tinygrad.helpers import prod, AMX, WINDOWS
 
 def ldt(dt:DType):
   if dt.vcount > 1: return f"<{dt.vcount} x {ldt(dt.scalar())}>"
@@ -109,7 +109,7 @@ def llvm_bf16_cast(buf:UOp, idx:UOp, root:UOp):
 
 class LLVMRenderer(Renderer):
   device = "LLVM"
-  abi = 'win64cc' if sys.platform == 'win32' else None
+  abi = 'win64cc' if WINDOWS else None
   supports_float4 = True
   has_local = False
   has_shared = False
