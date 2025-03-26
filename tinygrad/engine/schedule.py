@@ -6,7 +6,7 @@ from tinygrad.ops import can_pad, identity_element, resolve, view_left, merge_vi
 from tinygrad.codegen.symbolic import symbolic_simple
 from tinygrad.helpers import Context, ContextVar, Metadata, all_int, all_same, colored, diskcache_put, prod, dedup, unwrap, flatten, getenv, pluralize
 from tinygrad.helpers import FUSE_CONV_BW, FUSE_ARANGE, DEBUG, CAPTURE_PROCESS_REPLAY, DONT_REALIZE_EXPAND, DONT_GROUP_REDUCES, SPLIT_REDUCEOP
-from tinygrad.dtype import ImageDType
+from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.view import View, strides_for_shape
 from tinygrad.device import Buffer
@@ -212,8 +212,9 @@ def group_realizes(sink:UOp) -> dict[UOp, None]:
       group = {tr: None}
       ctx.realizes[tr] = None
     reduce_for_op.update((tr, r) for tr in group)
-    if FUSE_ARANGE and r.arg[0] is Ops.ADD and r.src[0].base.op is Ops.CONST:
+    if FUSE_ARANGE and r.arg[0] is Ops.ADD and r.src[0].base.op is Ops.CONST and (getenv("FUSE_ARANGE_UINT", 1) or not dtypes.is_unsigned(r.dtype)):
       # maybe fuse arange with its children
+      # TODO: FUSE_ARANGE_UINT is for not fusing rand.
       if len(flatten(ctx.children[tr] for tr in group)) != 0:
         for tr in group: del ctx.realizes[tr]
   # fuse double reduces with no other child
