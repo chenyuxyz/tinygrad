@@ -266,6 +266,13 @@ class TestSymbolic(unittest.TestCase):
   def test_mod_remove(self):
     self.helper_test_variable(Variable("a", 0, 6)%100, 0, 6, "a")
 
+  def test_mod_to_where(self):
+    # no rewrite
+    self.helper_test_variable(Variable("a", 0, 10)%3, 0, 2, "(a%3)")
+    # rewrite two result mod (note that the bounds are bad)
+    self.helper_test_variable(Variable("a", 0, 10)%7, -7, 10, "(a if (a<7) else (a+-7))")
+    self.helper_test_variable((Variable("a", 0, 10)+3)%7, -4, 13, "((a+3) if ((a+3)<7) else ((a+3)+-7))")
+
   def test_big_mod(self):
     # NOTE: we no longer support negative variables
     #self.helper_test_variable(Variable("a", -20, 20)%10, -9, 9, "(a%10)")

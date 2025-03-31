@@ -52,6 +52,8 @@ def validate_index(idx:UOp, mask:UOp|None=None):
     # WEBGPU has a BITCAST in the index. TODO: fix
     if any(x.op in {Ops.DEFINE_VAR, Ops.BITCAST} or (x.op is Ops.SPECIAL and any(not isinstance(y, int) for y in x.arg[1:])) for x in idx.toposort):
       return True
+    # NOTE: if there's a where in idx, the vmin/vmax is not tight
+    if any(u.op is Ops.WHERE for u in idx.src[1].toposort): return True
     vmin, vmax, sz = idx.src[1].vmin, idx.src[1].vmax, cast(PtrDType, idx.src[0].dtype).size
     if sz != -1 and (vmin < 0 or vmax >= sz):
       print(f"OUT OF BOUNDS ACCESS in INDEX {vmin} - {vmax} not in 0 - {sz}")

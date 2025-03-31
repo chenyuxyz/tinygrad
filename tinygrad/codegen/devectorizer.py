@@ -122,6 +122,8 @@ def simplify_valid_load(buf:UOp, start_idx:UOp, valid:UOp) -> UOp|None:
 
 # ***** optional patterns *****
 
+def two_result_mod(x,c): return (x<(x//c).vmax*c.arg).where(x-(x//c).vmin*c.arg, x-(x//c).vmax*c.arg)
+
 powers_of_two = {2**i:i for i in range(64)}
 @functools.lru_cache(None)
 def get_late_rewrite_patterns(ops, force_transcendental=False):
@@ -131,6 +133,8 @@ def get_late_rewrite_patterns(ops, force_transcendental=False):
   if Ops.SQRT not in ops: pat.append((UPat(Ops.SQRT, src=UPat.var("d")), lambda d: xpow(d, d.const_like(0.5))))
   # rewrite MOD to AND (which should always be supported, but not for generic in tests): x % (2**y) -> x & (2**y-1)
   if Ops.AND in ops: pat += [(UPat.var("x", dtypes.ints)%UPat.cvar("c"), lambda x,c: x & (c.arg-1) if c.arg in powers_of_two else None)]
+  # rewrite two result MOD to WHERE
+  pat += [(UPat.var("x") % UPat.cvar("c", vec=False), lambda x,c: two_result_mod(x,c) if (x//c).vmin+1==(x//c).vmax else None)]
   # rewrite MUL/IDIV to SHL+SHR: x*(2**y) -> shl(x,y) and x//(2**y) -> shr(x,y)
   if Ops.SHL in ops: pat += [(UPat.var("x", dtypes.ints)*UPat.cvar("c"), lambda c,x: x << v if (v:=powers_of_two.get(c.arg, 0)) else None)]
   if Ops.SHR in ops:
