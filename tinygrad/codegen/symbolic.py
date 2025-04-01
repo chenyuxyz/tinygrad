@@ -151,9 +151,10 @@ def div_and_mod_folding(x: UOp, y: UOp, which: Literal[Ops.MOD, Ops.IDIV], split
     elif (ubound := ubound + r * (v.vmax-v.vmin)) >= c: break
     offset -= r * v.vmin  # determine what the new offset would be
   else: # vmin/vmax of the remainder is between 0 and c, we can remove the mod/div
-    remainders = [min(r, r-c, key=abs) for r in remainders]
-    if which is Ops.MOD: return functools.reduce(operator.add, [r*v for r,v in zip(remainders,svars)], x.const_like(offset))
-    return functools.reduce(operator.add, [(f-r)//c * v for f,r,v in zip(factors, remainders,svars)], x.const_like((const-offset)//c))
+    return None
+    # remainders = [min(r, r-c, key=abs) for r in remainders]
+    # if which is Ops.MOD: return functools.reduce(operator.add, [r*v for r,v in zip(remainders,svars)], x.const_like(offset))
+    # return functools.reduce(operator.add, [(f-r)//c * v for f,r,v in zip(factors, remainders,svars)], x.const_like((const-offset)//c))
 
   if gcd != 1: something_changed = True
   if not something_changed:
@@ -168,7 +169,8 @@ def div_and_mod_folding(x: UOp, y: UOp, which: Literal[Ops.MOD, Ops.IDIV], split
       quo += q * v
 
   if which is Ops.MOD: return gcd*(rem % (c//gcd)) + const%gcd
-  return rem//(c//gcd)+quo
+  if x.vmin >= 0 and rem.vmin >= 0: return rem//(c//gcd)+quo
+  return None
 
 gep_pushing = PatternMatcher([
   # GEP/VECTORIZE, GEP/GEP, GEP/CONST, GEP/VCONST
