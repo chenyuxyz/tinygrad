@@ -139,9 +139,9 @@ class LAMB(Optimizer):
       v_hat = self.v[i] / (1.0 - self.b2_t)
       up = (m_hat / (v_hat.sqrt() + self.eps)) + self.wd * t.detach()
       if not self.adam:
-        r1 = t.detach().square().sum().sqrt()
-        r2 = up.square().sum().sqrt()
-        r: Tensor|float = Tensor.where(r1 > 0, Tensor.where(r2 > 0, r1 / r2, 1.0), 1.0)
+        r1 = t.detach().square().sum()
+        r2 = up.square().sum()
+        r: Tensor|float = ((r1 > 0)&(r2 > 0)).where((r1 / r2).sqrt(), 1.0)
       else:
         r = 1.0
       t.assign((t.detach() - self.lr * r * up).cast(t.dtype))
