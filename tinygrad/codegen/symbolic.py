@@ -168,7 +168,8 @@ def div_and_mod_folding(x: UOp, y: UOp, which: Literal[Ops.MOD, Ops.IDIV], split
       quo += q * v
 
   if which is Ops.MOD: return gcd*(rem % (c//gcd)) + const%gcd
-  return rem//(c//gcd)+quo
+  return None
+  # return rem//(c//gcd)+quo
 
 gep_pushing = PatternMatcher([
   # GEP/VECTORIZE, GEP/GEP, GEP/CONST, GEP/VCONST
