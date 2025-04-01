@@ -150,11 +150,11 @@ def div_and_mod_folding(x: UOp, y: UOp, which: Literal[Ops.MOD, Ops.IDIV], split
       if (lbound := lbound + (r:=r-c) * (v.vmax-v.vmin)) < 0: break
     elif (ubound := ubound + r * (v.vmax-v.vmin)) >= c: break
     offset -= r * v.vmin  # determine what the new offset would be
-  else: # vmin/vmax of the remainder is between 0 and c, we can remove the mod/div
-    return None
-    # remainders = [min(r, r-c, key=abs) for r in remainders]
-    # if which is Ops.MOD: return functools.reduce(operator.add, [r*v for r,v in zip(remainders,svars)], x.const_like(offset))
-    # return functools.reduce(operator.add, [(f-r)//c * v for f,r,v in zip(factors, remainders,svars)], x.const_like((const-offset)//c))
+  # else: # vmin/vmax of the remainder is between 0 and c, we can remove the mod/div
+  #   return None
+  #   # remainders = [min(r, r-c, key=abs) for r in remainders]
+  #   # if which is Ops.MOD: return functools.reduce(operator.add, [r*v for r,v in zip(remainders,svars)], x.const_like(offset))
+  #   # return functools.reduce(operator.add, [(f-r)//c * v for f,r,v in zip(factors, remainders,svars)], x.const_like((const-offset)//c))
 
   if gcd != 1: something_changed = True
   if not something_changed:
