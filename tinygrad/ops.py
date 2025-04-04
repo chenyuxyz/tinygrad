@@ -24,7 +24,9 @@ class SimpleMathTrait:
   # great functions you get!
   def ufix(self, x): return self.const_like(x) if not isinstance(x, MathTrait) else x
   def _binop(self, op, x, reverse): return self.ufix(x).alu(op, self) if reverse else self.alu(op, self.ufix(x))
-  def logical_not(self): return self.ne(True)
+  def logical_not(self):
+    assert self.dtype.scalar() == dtypes.bool
+    return self.ne(True)
   def neg(self):
     if (dtype:=getattr(self, 'dtype')) is None: raise TypeError(f"MathTraits __neg__ requires a dtype, {self=}")
     return self.logical_not() if dtype.scalar() == dtypes.bool else self*(-1)
