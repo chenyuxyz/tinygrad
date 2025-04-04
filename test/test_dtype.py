@@ -596,7 +596,7 @@ class TestTypeSpec(unittest.TestCase):
     assert X_data.gather(1, indices).dtype == X_data.dtype
 
   @given(strat.sampled_from(dtype_floats), strat.sampled_from(dtype_floats))
-  def test_attention_returns_same_dtype(self, data_dtype, default_float):
+  def test_scaled_dot_product_attention_returns_same_dtype(self, data_dtype, default_float):
     dtypes.default_float = default_float
     query = Tensor.rand(32, 8, 128, 64, dtype=data_dtype)
     key = Tensor.rand(32, 8, 128, 64, dtype=data_dtype)
