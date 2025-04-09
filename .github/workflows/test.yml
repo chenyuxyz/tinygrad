@@ -320,7 +320,7 @@ jobs:
     - name: Lint tinygrad with pylint
       run: python -m pylint tinygrad/
     - name: Run mypy
-      run: python3 -m mypy tinygrad/ --strict-equality
+      run: python3 -m mypy tinygrad/ --strict-equality --verbose
 
   unittest:
     name: Unit Tests
