@@ -602,11 +602,13 @@ jobs:
       uses: ./.github/actions/setup-tinygrad
       with:
         key: metal2
-        deps: testing
+        deps: testing,linting
         python-version: '3.11'
         amd: 'true'
         cuda: 'true'
         llvm: 'true'
+    - name: Run mypy
+      run: python3 -m mypy tinygrad/ --strict-equality
     - name: Run real world test
       run: JIT=2 METAL=1 python -m pytest -n=auto test/models/test_real_world.py --durations=20
     - name: Test models (Metal)
