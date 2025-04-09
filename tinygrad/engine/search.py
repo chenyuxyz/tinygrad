@@ -187,6 +187,16 @@ def beam_search(lin:Kernel, rawbufs:list[Buffer], amt:int, allow_test_size=True,
     if beam_pool is not None: beam_pool.terminate()
     raise e
 
+  if (more:=getenv("BEAM_MORE")) and math.isfinite(beam[0][1]):
+    if amt < more and beam[0][1]*1e6 > 100:
+      if time.perf_counter() - st > 10:
+        print(f"too slow don't rebeam, {beam[0][1]*1e6=}")
+      else:
+        print(f"{beam[0][1]*1e6=}, rebeam with {more}, {beam[0][0].applied_opts=}")
+        beam[0] = (beam_search(lin, rawbufs, more, allow_test_size, disable_cache), beam[0][1])
+    elif amt == more:
+      print(f"rebeam time {beam[0][1]*1e6=}, {beam[0][0].applied_opts=}")
+
   if CACHELEVEL >= 1: diskcache_put("beam_search", key, beam[0][0].applied_opts)
   if BEAM_DEBUG: print(f"BEAM_SEARCH: final tm={time_to_str(beam[0][1], w=0)}, applied_opts={beam[0][0].applied_opts}")
   return beam[0][0]
