@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from tinygrad import Tensor, GlobalCounters, Context
+from tinygrad import Tensor, GlobalCounters, Context, Device
 from tinygrad.dtype import DTypeLike
 from tinygrad.helpers import DEBUG, get_single_element
 from tinygrad.engine.realize import lower_schedule_item
@@ -60,6 +60,11 @@ class TestFuse(unittest.TestCase):
       b = (Tensor.rand(N,N)-0.5).realize()
       c = (Tensor.rand(N,N)-0.5).realize()
     self._test_fuse(lambda a,b,c: a@b@c, a, b, c, atol=1e-5)
+
+  @unittest.expectedFailure  # TODO: verification failed for Ops.MULTI
+  def test_sharded_fuse_softmax(self):
+    a = Tensor.rand(50,50).realize().shard(tuple(f"{Device.DEFAULT}:{i}" for i in range(2)))
+    self._test_fuse(lambda a: a.argmax(axis=-1), a)
 
   @unittest.skip("infinite looping")
   def test_flash_attention(self):
