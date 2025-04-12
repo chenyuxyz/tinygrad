@@ -430,6 +430,9 @@ class Kernel:
     if self.simplify_ones() and self.tensor_core_opts:
       self.tensor_core_opts.fix_axes(axis) # fix up axes in TC opts if required after simplify_ones()
 
+  def apply_opts(self, opts:Sequence[Opt]):
+    for opt in opts: self.apply_opt(opt)
+
   def required_optimizations(self) -> Kernel:
     if isinstance(self.membufs[0].dtype, ImageDType):
       unit_stride_axes_mul_4 = [i for i in self.sts[0].unit_stride_axes(ignore_valid=True) if self.sts[0].shape[i]%4 == 0]
