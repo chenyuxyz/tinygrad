@@ -460,8 +460,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
       lbs = []
       for sz,off in zip(sizes, itertools.accumulate(sizes, initial=0)):
         lbs.append(self.shrink(tuple((0,s) if i != axis else (off,off+sz) for i,s in enumerate(self.shape))))
-    sharded_lbs = [lb.copy_to_device(d) for lb,d in zip(lbs, devices)]
-    return UOp.multi(*[lb.contiguous() for lb in sharded_lbs], axis=axis)
+    return UOp.multi(*[lb.contiguous().copy_to_device(d) for lb,d in zip(lbs, devices)], axis=axis)
 
   # *** from LazyBuffer ***
 
