@@ -3678,7 +3678,7 @@ class Tensor(SimpleMathTrait):
     print(t.linear(weight, bias).numpy())
     ```
     """
-    x = self.mul(weight) if len(weight.shape) == 1 else self.dot(weight)
+    x = self.dot(weight)
     return x.add(bias) if bias is not None else x
 
   def sequential(self, ll:list[Callable[[Tensor], Tensor]]) -> Tensor:
