@@ -153,6 +153,7 @@ class TestTranscendentalVectorized(unittest.TestCase):
     for vec_size in [1,2,3,4,5,127,128]: self._test_vectorized_op(Tensor.sin, np.sin, (-100, 100), vec_size)
 
   def test_pow_vectorized(self):
+    raise
     # np.pow returns nan for negative values raised to a non-integral power
     for vec_size in [1,2,3,4,5,127,128]: self._test_vectorized_op(Tensor.pow, np.pow, (0.001, 200), vec_size, param_range=(-10, 10))
 
