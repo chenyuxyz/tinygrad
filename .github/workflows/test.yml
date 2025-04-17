@@ -554,7 +554,7 @@ jobs:
 
     name: Linux (${{ matrix.backend }})
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout Code
@@ -683,7 +683,7 @@ jobs:
       matrix:
         backend: [metal, llvm, cpu]
     name: MacOS (${{ matrix.backend }})
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 20
     steps:
       - name: Checkout Code
