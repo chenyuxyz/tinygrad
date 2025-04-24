@@ -866,7 +866,6 @@ class TestOps(unittest.TestCase):
   def test_abs_exact(self):
     helper_test_op(None, torch.abs, Tensor.abs, vals=[[-1.,0,1]])
 
-  @unittest.skipIf(TRANSCENDENTAL and Device.DEFAULT=="AMD", "TODO: remu crashes")
   def test_log(self):
     helper_test_op([(45,65)], torch.log, Tensor.log)
     helper_test_op(None, torch.log, Tensor.log, vals=[[math.inf, -math.inf, math.nan]])
@@ -876,7 +875,6 @@ class TestOps(unittest.TestCase):
     helper_test_op(None, torch.log2, Tensor.log2, vals=[[math.inf, -math.inf, math.nan]])
     helper_test_op([()], torch.log2, Tensor.log2)
 
-  @unittest.skipIf(TRANSCENDENTAL and Device.DEFAULT=="AMD", "TODO: remu crashes")
   def test_exp(self):
     helper_test_op([(45,65)], torch.exp, Tensor.exp)
     helper_test_op(None, torch.exp, Tensor.exp, vals=[[math.inf, -math.inf, math.nan]])
