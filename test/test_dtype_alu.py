@@ -1,16 +1,18 @@
-import unittest
+import unittest, operator, math
 
 from tinygrad import Tensor, dtypes, Device
-import operator
-import numpy as np
-from hypothesis import given, strategies as strat, settings, HealthCheck
 from tinygrad.dtype import DType
 from tinygrad.helpers import CI, getenv
 from tinygrad.engine.realize import run_schedule
 from tinygrad.ops import GroupOp
 from tinygrad.tensor import _to_np_dtype
 from tinygrad.device import is_dtype_supported
-import pytest, math
+
+import numpy as np
+import pytest
+import torch
+from hypothesis import given, strategies as strat, settings, HealthCheck
+
 pytestmark = pytest.mark.filterwarnings("ignore")
 
 settings.register_profile("my_profile", max_examples=200, deadline=None, derandomize=getenv("DERANDOMIZE_CI", False))
@@ -26,10 +28,8 @@ binary_operations = [operator.add, operator.sub, operator.mul, operator.lt, oper
 if Device.DEFAULT == "LLVM" or getenv("AMD_LLVM", 0):
   binary_operations.remove(operator.lt)
 
-integer_binary_operations = binary_operations + [(Tensor.bitwise_xor, np.bitwise_xor), (Tensor.bitwise_and, np.bitwise_and),
-                                                 (Tensor.bitwise_or, np.bitwise_or)]
-unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), (Tensor.sin, np.sin),
-                    (Tensor.sqrt, np.sqrt), (Tensor.reciprocal, np.reciprocal)]
+integer_binary_operations = binary_operations + [lambda x: x.bitwise_xor(), lambda x: x.bitwise_and(), lambda x: x.bitwise_or()]
+unary_operations = [lambda x: x.exp(), lambda x: x.log(), lambda x: x.sin(), lambda x: x.sqrt(), lambda x: x.reciprocal()]
 
 # TODO: enable this (this is a dtype issue)
 #binary_operations.append(operator.truediv)
@@ -63,10 +63,13 @@ def universal_test(a, b, dtype, op):
   if (math.isnan(a) or math.isnan(b)) and Device.DEFAULT == "WEBGPU" and CI: return
   if not isinstance(op, tuple): op = (op, op)
   tensor_value = (op[0](Tensor([a], dtype=dtype), Tensor([b], dtype=dtype))).numpy()
-  numpy_value = op[1](np.array([a]).astype(_to_np_dtype(dtype)), np.array([b]).astype(_to_np_dtype(dtype)))
-  if dtype is dtypes.bfloat16: np.testing.assert_allclose(tensor_value, numpy_value, atol=1e-3, rtol=1e-2)
-  elif dtype in dtypes_float: np.testing.assert_allclose(tensor_value, numpy_value, atol=1e-10)
-  else: np.testing.assert_equal(tensor_value, numpy_value)
+  if dtype == dtypes.bfloat16:
+    ground_truth = op[1](torch.tensor([a], dtype=torch.bfloat16), torch.tensor([b], dtype=torch.bfloat16)).float().item()
+    np.testing.assert_allclose(tensor_value, ground_truth, atol=1e-6, rtol=1e-6)
+  else:
+    ground_truth = op[1](np.array([a]).astype(_to_np_dtype(dtype)), np.array([b]).astype(_to_np_dtype(dtype)))
+    if dtype in dtypes_float: np.testing.assert_allclose(tensor_value, ground_truth, atol=1e-10)
+    else: np.testing.assert_equal(tensor_value, ground_truth)
 
 def universal_test_unary(a, dtype, op):
   if not isinstance(op, tuple): op = (op, op)
@@ -75,10 +78,16 @@ def universal_test_unary(a, dtype, op):
   ast = sched[-1].ast
   run_schedule(sched)
   tensor_value = out.numpy()
-  numpy_value = op[1](np.array([a]).astype(_to_np_dtype(dtype)))
-  if dtype in (*dtypes_float, dtypes.bfloat16):
-    np.testing.assert_allclose(tensor_value, numpy_value, atol=1e-3, rtol=1e-2)
-  else: np.testing.assert_equal(tensor_value, numpy_value)
+
+  if dtype == dtypes.bfloat16:
+    ground_truth = op[1](torch.tensor([a], dtype=torch.bfloat16)).float().item()
+    # TODO: exp is not precise on METAL and requires larger rtol
+    np.testing.assert_allclose(tensor_value, ground_truth, atol=1e-3, rtol=2e-2)
+  else:
+    ground_truth = op[1](np.array([a]).astype(_to_np_dtype(dtype)))
+    if dtype in dtypes_float: np.testing.assert_allclose(tensor_value, ground_truth, atol=1e-6, rtol=1e-6)
+    else: np.testing.assert_equal(tensor_value, ground_truth)
+
   if op[0] != Tensor.reciprocal: # reciprocal is not supported in most backends
     op = [x for x in ast.toposort() if x.op in GroupOp.Unary][0]
     assert op.dtype == dtype
@@ -123,7 +132,6 @@ class TestDTypeALU(unittest.TestCase):
 
   @unittest.skipUnless(is_dtype_supported(dtypes.bfloat16, Device.DEFAULT), f"no bfloat16 on {Device.DEFAULT}")
   @given(ht.bfloat16, strat.sampled_from(unary_operations))
-  @unittest.skipIf(Device.DEFAULT in ["METAL", "AMD"], "broken on AMD and METAL")
   def test_bfloat16_unary(self, a, op): universal_test_unary(a, dtypes.bfloat16, op)
 
   @given(ht.uint8, ht.uint8, strat.sampled_from(integer_binary_operations))
