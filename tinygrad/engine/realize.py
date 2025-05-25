@@ -118,12 +118,13 @@ def get_runner(device:str, ast:UOp) -> CompiledRunner:
 @dataclass(frozen=True)
 class ExecItem:
   prg: Runner
-  bufs: list[Optional[Buffer]]
+  bufs: list[Buffer]
   metadata: Optional[tuple[Metadata, ...]] = None
   fixedvars: dict[Variable, int] = field(default_factory=dict)
   def run(self, _var_vals:Optional[dict[Variable, int]]=None, wait=False, jit=False, do_update_stats=True) -> Optional[float]:
+    assert all(b is not None for b in self.bufs), self.bufs
     var_vals = self.fixedvars if _var_vals is None else (_var_vals|self.fixedvars)
-    bufs = [cast(Buffer, x) for x in self.bufs] if jit else [cast(Buffer, x).ensure_allocated() for x in self.bufs]
+    bufs = self.bufs if jit else [x.ensure_allocated() for x in self.bufs]
     et = self.prg(bufs, var_vals, wait=wait or DEBUG >= 2)
     if do_update_stats:
       GlobalCounters.kernel_count += 1
