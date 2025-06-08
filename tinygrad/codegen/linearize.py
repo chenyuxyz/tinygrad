@@ -3,7 +3,7 @@ import heapq
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from tinygrad.uop.ops import UOp, Ops, PatternMatcher, UPat, GroupOp
-from tinygrad.helpers import dedup, partition, all_same, flatten
+from tinygrad.helpers import dedup, partition, all_same, flatten, getenv
 from tinygrad.uop.spec import type_verify
 
 # NOTE: any toposort should be valid here, unlike last time this isn't required, it's just for speed
@@ -15,7 +15,7 @@ def block_reorder(lst:list[UOp]) -> list[UOp]:
 
   # get local children and assign priorities
   # NOTE: this requires the lst be locally toposorted
-  for u in reversed(lst):
+  for u in lst:
     in_degree[u] = 0
     for s in u.src:
       if s in in_this_block:
@@ -158,7 +158,8 @@ def make_block_bottom_up(ctx:BlockContext, x:UOp):
     base_block = UOp(Ops.BLOCKSTART, src=tuple(v), arg=(new_ctx, new_child_ctx))
     srcs.append(add_blockends(base_block, new_ctx, current_ctx))
 
-  lst = block_reorder(lst[::-1])
+  lst = lst[::-1]
+  if getenv("BLOCK_REORDER", 1): lst = block_reorder(lst)
   bb = BasicBlock(tuple(lst), ctx=current_ctx, cnt=child_count, child_ctx=child_ctx)
   return UOp(Ops.BLOCK, src=tuple(srcs), arg=bb)
 
