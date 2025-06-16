@@ -19,7 +19,7 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(3, i)
+      a = Tensor.rand(3, i).realize()
       symbolic = jf(a.reshape(3, vi)).reshape(3, i).numpy()
       expected = f(a).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -30,8 +30,8 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(3, i)
-      b = Tensor.rand(3, i)
+      a = Tensor.rand(3, i).realize()
+      b = Tensor.rand(3, i).realize()
       symbolic = jf(a.reshape(3, vi), b.reshape(3, vi)).reshape(3, i).numpy()
       expected = f(a, b).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -42,8 +42,8 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(3, i)
-      b = Tensor.rand(i, 5)
+      a = Tensor.rand(3, i).realize()
+      b = Tensor.rand(i, 5).realize()
       symbolic = jf(a.reshape(3, vi), b.reshape(vi, 5)).numpy()
       expected = f(a, b).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -57,8 +57,8 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(3, i)
-      b = Tensor.rand(i, 5)
+      a = Tensor.rand(3, i).realize()
+      b = Tensor.rand(i, 5).realize()
       symbolic = jf(a.reshape(3, vi), b.reshape(vi, 5)).numpy()
       expected = f(a, b).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -69,9 +69,9 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      q = Tensor.rand(2, 1, 4, 8)
-      k = Tensor.rand(2, i, 4, 8)
-      v = Tensor.rand(2, i, 4, 8)
+      q = Tensor.rand(2, 1, 4, 8).realize()
+      k = Tensor.rand(2, i, 4, 8).realize()
+      v = Tensor.rand(2, i, 4, 8).realize()
       symbolic = jf(q, k.reshape(2, vi, 4, 8), v.reshape(2, vi, 4, 8)).reshape(2, 4, 1, 8).numpy()
       expected = f(q, k, v).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -82,8 +82,8 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(i, 3)
-      b = Tensor.rand(2, 3)
+      a = Tensor.rand(i, 3).realize()
+      b = Tensor.rand(2, 3).realize()
       symbolic = jf(a.reshape(vi, 3), b).reshape(i+2, 3).numpy()
       expected = f(a, b).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -94,8 +94,8 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(3, i)
-      b = Tensor.rand(3, 2)
+      a = Tensor.rand(3, i).realize()
+      b = Tensor.rand(3, 2).realize()
       symbolic = jf(a.reshape(3, vi), b).reshape(3, i+2).numpy()
       expected = f(a, b).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -108,8 +108,8 @@ class TestSymbolicJit(unittest.TestCase):
       for j in range(1, 5):
         vi = Variable("i", 1, 10).bind(i)
         vj = Variable("j", 1, 10).bind(j)
-        a = Tensor.rand(i, 3)
-        b = Tensor.rand(j, 3)
+        a = Tensor.rand(i, 3).realize()
+        b = Tensor.rand(j, 3).realize()
         symbolic = jf(a.reshape(vi, 3), b.reshape(vj, 3)).reshape(i+j, 3).numpy()
         expected = f(a, b).numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -122,8 +122,8 @@ class TestSymbolicJit(unittest.TestCase):
       for j in range(1, 5):
         vi = Variable("i", 1, 10).bind(i)
         vj = Variable("j", 1, 10).bind(j)
-        a = Tensor.rand(3, i)
-        b = Tensor.rand(3, j)
+        a = Tensor.rand(3, i).realize()
+        b = Tensor.rand(3, j).realize()
         symbolic = jf(a.reshape(3, vi), b.reshape(3, vj)).reshape(3, i+j).numpy()
         expected = f(a, b).numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -136,8 +136,8 @@ class TestSymbolicJit(unittest.TestCase):
       for j in range(1, 5):
         vi = Variable("i", 1, 10).bind(i)
         vj = Variable("j", 1, 10).bind(j)
-        a = Tensor.rand(i, 3)
-        b = Tensor.rand(3, j)
+        a = Tensor.rand(i, 3).realize()
+        b = Tensor.rand(3, j).realize()
         symbolic = jf(a.reshape(vi, 3), b.reshape(3, vj)).reshape(i, j).numpy()
         expected = f(a, b).numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -150,8 +150,8 @@ class TestSymbolicJit(unittest.TestCase):
       for j in range(1, 5):
         vi = Variable("i", 1, 10).bind(i)
         vj = Variable("j", 1, 10).bind(j)
-        a = Tensor.rand(j, 3)
-        b = Tensor.rand(3, i)
+        a = Tensor.rand(j, 3).realize()
+        b = Tensor.rand(3, i).realize()
         symbolic = jf(a.reshape(vj, 3), b.reshape(3, vi)).reshape(j, i).numpy()
         expected = f(a, b).numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -162,12 +162,12 @@ class TestSymbolicJit(unittest.TestCase):
     def add(a, b): return (a+b).realize()
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(3, i).reshape(3, vi)
-      b = Tensor.rand(3, i).reshape(3, vi)
+      a = Tensor.rand(3, i).realize().reshape(3, vi)
+      b = Tensor.rand(3, i).realize().reshape(3, vi)
       add(a, b)
     vi2 = Variable("i", 1, 10).bind(7)
-    a = Tensor.rand(3, 7).reshape(3, vi2)
-    bad = Tensor.rand(4, 7).reshape(4, vi2)
+    a = Tensor.rand(3, 7).realize().reshape(3, vi2)
+    bad = Tensor.rand(4, 7).realize().reshape(4, vi2)
     with self.assertRaises(AssertionError):
       add(a, bad)
 
@@ -177,7 +177,7 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(7, 11)
+      a = Tensor.rand(7, 11).realize()
       symbolic = a.shrink(((3,5),(vi,vi+2)))
       symbolic = jf(symbolic).numpy()
       expected = f(a.shrink(((3,5),(i,i+2)))).numpy()
@@ -190,7 +190,7 @@ class TestSymbolicJit(unittest.TestCase):
     jf = TinyJit(f)
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.rand(7, 11)
+      a = Tensor.rand(7, 11).realize()
       symbolic = a[3:5, vi:vi+2]
       symbolic = jf(symbolic).numpy()
       expected = f(a[3:5, i:i+2]).numpy()
@@ -229,17 +229,17 @@ class TestSymbolicJit(unittest.TestCase):
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
       # aixs = None
-      a = Tensor.rand(i, 3)
+      a = Tensor.rand(i, 3).realize()
       symbolic = jf(a.reshape(vi, 3)).numpy()
       expected = a.mean().numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
       # aixs = 0
-      a = Tensor.rand(i, 3)
+      a = Tensor.rand(i, 3).realize()
       symbolic = jf0(a.reshape(vi, 3)).numpy()
       expected = a.mean(0).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
       # aixs = 1
-      a = Tensor.rand(i, 3)
+      a = Tensor.rand(i, 3).realize()
       symbolic = jf1(a.reshape(vi, 3)).reshape(i).numpy()
       expected = a.mean(1).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -256,17 +256,17 @@ class TestSymbolicJit(unittest.TestCase):
         vi = Variable("i", 1, 10).bind(i)
         vj = Variable("j", 1, 10).bind(j)
         # aixs = None
-        a = Tensor.rand(i, j)
+        a = Tensor.rand(i, j).realize()
         symbolic = jf(a.reshape(vi, vj)).numpy()
         expected = a.mean().numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
         # aixs = 0
-        a = Tensor.rand(i, j)
+        a = Tensor.rand(i, j).realize()
         symbolic = jf0(a.reshape(vi, vj)).reshape(j).numpy()
         expected = a.mean(0).numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
         # aixs = 1
-        a = Tensor.rand(i, j)
+        a = Tensor.rand(i, j).realize()
         symbolic = jf1(a.reshape(vi, vj)).reshape(i).numpy()
         expected = a.mean(1).numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -281,17 +281,17 @@ class TestSymbolicJit(unittest.TestCase):
     for i in range(1, 5):
       vi = Variable("i", 1, 10).bind(i)
       # aixs = None
-      a = Tensor.rand(i, 3)
+      a = Tensor.rand(i, 3).realize()
       symbolic = jf(a.reshape(vi, 3)).numpy()
       expected = a.var().numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
       # aixs = 0
-      a = Tensor.rand(i, 3)
+      a = Tensor.rand(i, 3).realize()
       symbolic = jf0(a.reshape(vi, 3)).numpy()
       expected = a.var(0).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
       # aixs = 1
-      a = Tensor.rand(i, 3)
+      a = Tensor.rand(i, 3).realize()
       symbolic = jf1(a.reshape(vi, 3)).reshape(i).numpy()
       expected = a.var(1).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
@@ -308,17 +308,17 @@ class TestSymbolicJit(unittest.TestCase):
         vi = Variable("i", 1, 10).bind(i)
         vj = Variable("j", 1, 10).bind(j)
         # aixs = None
-        a = Tensor.rand(i, j)
+        a = Tensor.rand(i, j).realize()
         symbolic = jf(a.reshape(vi, vj)).numpy()
         expected = a.var().numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
         # aixs = 0
-        a = Tensor.rand(i, j)
+        a = Tensor.rand(i, j).realize()
         symbolic = jf0(a.reshape(vi, vj)).reshape(j).numpy()
         expected = a.var(0).numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
         # aixs = 1
-        a = Tensor.rand(i, j)
+        a = Tensor.rand(i, j).realize()
         symbolic = jf1(a.reshape(vi, vj)).reshape(i).numpy()
         expected = a.var(1).numpy()
         np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
