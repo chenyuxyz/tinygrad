@@ -265,8 +265,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
       assert len(axis) == len(new_axis)
     else:
       ret, new_axis = self, axis
-    ret = UOp(Ops.REDUCE_AXIS, self.dtype, (ret,), (op, new_axis))
-    return ret.reshape(tuple([x if i not in axis else 1 for i,x in enumerate(self.shape)]))
+    return UOp(Ops.REDUCE_AXIS, self.dtype, (ret,), (op, new_axis))
   def assign(self, x:UOp): return UOp(Ops.ASSIGN, self.dtype, (self,x))
   def reduce(self, *src:UOp, **kwargs): return UOp(Ops.REDUCE, kwargs.pop('dtype', self.dtype), src=(self,)+src, **kwargs)
   def contiguous(self): return self.alu(Ops.CONTIGUOUS)
