@@ -1310,6 +1310,18 @@ def train_llama3():
   # vocab_size from the mixtral tokenizer
   model = Transformer(**(MODEL_PARAMS[getenv("LLAMA3_SIZE", "8B")]["args"]|{"vocab_size": 32000}), max_context=sequence_length, jit=False, disable_kv_cache=True)
 
+  if (GPUS := getenv("GPUS", 1)) > 1:
+    device = tuple(f"{Device.DEFAULT}:{i}" for i in range(GPUS))
+    for k,v in get_state_dict(model).items():
+      if 'scale' in k: v.shard_(device, axis=None)  # from quantized
+      elif '.attention.' in k: v.shard_(device, axis=-1)
+      elif '.feed_forward.w1.' in k: v.shard_(device, axis=0)
+      elif '.feed_forward.w3.' in k: v.shard_(device, axis=0)
+      elif '.feed_forward.' in k: v.shard_(device, axis=-1)
+      elif 'tok_embeddings.weight' in k: v.shard_(device, axis=0)
+      elif 'output.weight' in k: v.shard_(device, axis=0)
+      else: v.shard_(device, axis=None)
+
   optim = AdamW(get_parameters(model), lr=0.0,
                 b1=opt_adamw_beta_1, b2=opt_adamw_beta_2, eps=opt_adamw_epsilon, weight_decay=opt_adamw_weight_decay)
   scheduler = CosineAnnealingLRWithWarmup(optim, opt_base_learning_rate, opt_end_learning_rate, opt_learning_rate_warmup_steps, opt_learning_rate_decay_steps)
@@ -1343,6 +1355,10 @@ def train_llama3():
   # overfitting this example should give cross_entropy log(BS)
   fake_input = Tensor([list(range(getenv("SEQLEN", 10)))], dtype="int16").expand(BS, -1)
   fake_label = Tensor(list(range(BS)), dtype="int16")
+
+  if (GPUS := getenv("GPUS", 1)) > 1:
+    fake_input = fake_input.shard(device)
+    fake_label = fake_label.shard(device)
 
   for _ in range(100):
     GlobalCounters.reset()
