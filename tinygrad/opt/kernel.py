@@ -87,7 +87,6 @@ class Kernel:
     self.finalized: bool = False
 
     # group simplifies
-    self.simplify_ones()
     self.simplify_merge_adjacent()
 
     # axis types
@@ -240,6 +239,8 @@ class Kernel:
 
     # do the reshapes
     for i,x in enumerate(rets[:len(self.sts)]): self.sts[i] = self.sts[i].reshape(tuple([y[0] for y in x]))
+    # if leading dim is 1, squeeze it
+    if all(st.shape and st.shape[0] == 1 for st in self.sts): self.reshape(lambda x: x[1:])
 
   # ******************** apply optimizations ********************
 
