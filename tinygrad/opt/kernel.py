@@ -203,8 +203,6 @@ class Kernel:
   def simplify_merge_adjacent(self):
     if self.shape_len == 0: return
     shapes, strides = [x.shape for x in self.sts], [x.real_strides() for x in self.sts]
-    # NOTE: we can't use self.first_reduce yet
-    first_reduce = [resolve(x!=y) for x,y in zip(self.sts[0].shape[:self.first_upcast]+(0,), self.full_shape[:self.first_upcast]+(1,))].index(True)
 
     # if it's an image, insert fake strides such that this fusion doesn't happen across image axes
     # TODO: remove membufs
@@ -221,7 +219,7 @@ class Kernel:
         shapes.append(self.output_shape)
         strides.append(special_strides)
 
-    # merge dimensions if we can, multi _merge_dims
+    # merge dimensions if we can, multi merge_dims
     # NOTE: this does not always preserve the reduce dimension
     # TODO: move this into shapetracker, with tests!
     # TODO: how does this work with multi-reduce?
@@ -232,8 +230,8 @@ class Kernel:
         # TODO: added the always mergeability of 1s, is this right? if so, add to shapetracker in the 1 case
         si, sti, last_st = s[i], st[i], ret[-1][1]
         can_merge.append((sti is not None) and ((sti != 0 and last_st == si*sti) or (sti == 0 and last_st == 0)))
-      # more can merge than this
-      mergeable = all(can_merge) and i != first_reduce
+      # don't merge reduce axis
+      mergeable = all(can_merge) and self.sts[0].shape[i] != self.full_shape[i]
       for j,(s,st) in enumerate(zip(shapes, strides)):
         if mergeable: rets[j][-1] = (rets[j][-1][0] * s[i], st[i])
         else: rets[j].append((s[i], st[i]))
