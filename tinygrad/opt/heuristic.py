@@ -57,7 +57,7 @@ def hand_coded_optimizations(k:Kernel) -> list[Opt]:
   for axis in range(k.first_reduce):
     # we might want to be able to split axes that are masked, or refuse to merge them in simplify_merge_adjacent
     # for now skip upcasting here if there is a symbolic axis
-    if isinstance(k.full_shape[axis], int) and k.full_shape[axis] <= 7 and any(st.axis_is_masked(axis) for st in k.sts) and \
+    if isinstance(k.full_shape[axis], int) and k.full_shape[axis] <= 7 and any(st.real_strides()[axis] is None for st in k.sts) and \
       prod(k.full_shape[j] for j in to_upcast) * k.full_shape[axis] <= 7 * 7:
       if DEBUG >= 4: print(f"upcasting masked axis : {axis}")
       to_upcast.append(axis)
