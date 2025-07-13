@@ -206,21 +206,6 @@ class Kernel:
     # NOTE: we can't use self.first_reduce yet
     first_reduce = [resolve(x!=y) for x,y in zip(self.sts[0].shape[:self.first_upcast]+(0,), self.full_shape[:self.first_upcast]+(1,))].index(True)
 
-    # if it's an image, insert fake strides such that this fusion doesn't happen across image axes
-    # TODO: remove membufs
-    membufs = dedup([x.src[0].base for x in self.bufs if x.op in {Ops.LOAD, Ops.STORE}])
-    if isinstance(membufs[0].base.dtype, ImageDType):
-      base_shape = membufs[0].base.dtype.shape
-      if shape_idx_groups := get_contraction(self.output_shape, base_shape):
-        special_strides: tuple[sint, ...] = tuple()
-        for i,g in enumerate(shape_idx_groups):
-          shape_piece = tuple(self.output_shape[x] for x in g)
-          assert prod(shape_piece) == base_shape[i], f"get_contraction was wrong? {shape_piece} != {base_shape[i]}"
-          special_strides += strides_for_shape(shape_piece)
-        # adding the fake image shape
-        shapes.append(self.output_shape)
-        strides.append(special_strides)
-
     # merge dimensions if we can, multi _merge_dims
     # NOTE: this does not always preserve the reduce dimension
     # TODO: move this into shapetracker, with tests!
