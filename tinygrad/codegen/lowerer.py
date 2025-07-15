@@ -13,8 +13,9 @@ class IndexContext:
   ridxs: list[UOp]
 
 def get_index(ast:UOp) -> IndexContext:
+  assert isinstance(ast.arg, KernelInfo), ast.arg
   axis_types = ast.arg.axis_types if isinstance(ast.arg, KernelInfo) else ()
-  # if len(ast.full_shape) != len(axis_types): axis_types = (AxisType.LOOP,)*len(ast.full_shape)
+  if len(ast.full_shape) != len(axis_types): axis_types = (AxisType.LOOP,)*len(ast.full_shape)
 
   # indexes
   idxs = []
