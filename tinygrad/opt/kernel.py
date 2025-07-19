@@ -245,7 +245,8 @@ class Kernel:
       if op is OptOps.UNROLL: return self.unrollable_dims[axis]
       if op in {OptOps.GROUP, OptOps.GROUPTOP}: return self.axes_of(AxisType.REDUCE)[axis]
       check(axis < self.shape_len, "invalid axis")
-      return axis
+      # ignore size 1 axis when counting axis
+      return [i for i,s in enumerate(self.full_shape) if resolve(s != 1)][axis]
     except IndexError as e: raise KernelOptError from e
 
   def apply_opt(self, opt:Opt, append_opt:bool=True):
@@ -331,8 +332,6 @@ class Kernel:
       check(padded, "nothing was padded")
 
     if append_opt: self.applied_opts.append(opt)
-    if self.simplify_ones() and self.tensor_core_opts:
-      self.tensor_core_opts.fix_axes(axis) # fix up axes in TC opts if required after simplify_ones()
 
   def apply_opts(self, opts:Sequence[Opt]) -> Kernel:
     for opt in opts: self.apply_opt(opt)
