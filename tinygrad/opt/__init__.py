@@ -27,4 +27,5 @@ def get_optimized_ast(ast:UOp, renderer:Renderer) -> UOp:
       kb = Kernel(ast, opts=renderer)
       rawbufs = bufs_from_lin(kb, allocate=False)
       k = beam_search(kb, rawbufs, BEAM.value, bool(getenv("BEAM_ESTIMATE", 1)))
+  k.simplify_ones()
   return k.get_optimized_ast()
