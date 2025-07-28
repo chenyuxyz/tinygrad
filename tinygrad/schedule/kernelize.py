@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from tinygrad.uop.ops import UOp, Ops, GroupOp, PatternMatcher, UPat, graph_rewrite, graph_rewrite_map, identity_element, resolve, sint
+from tinygrad.uop.ops import UOp, Ops, GroupOp, PatternMatcher, UPat, graph_rewrite, graph_rewrite_map, identity_element, resolve
 from tinygrad.uop.ops import track_rewrites, _substitute
 from tinygrad.uop.spec import type_verify, tensor_uop_spec
 from tinygrad.uop.symbolic import symbolic_simple
@@ -7,7 +7,7 @@ from tinygrad.helpers import Metadata, all_int, all_same, colored, prod, dedup, 
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.schedule.multi import multi_pm
 from tinygrad.shape.shapetracker import ShapeTracker
-from tinygrad.shape.view import View, strides_for_shape, get_contraction_with_reduce
+from tinygrad.shape.view import View, strides_for_shape
 from tinygrad.schedule.grouper import group_realizes, ALWAYS_CONTIGUOUS
 
 # creation can recurse a lot
@@ -164,34 +164,10 @@ merge_views = PatternMatcher([
    lambda x,view: x.replace(src=(x.src[0].replace(arg=x.st+view.st),)) if all(v.mask is None for v in (x.st+view.st).views) else None),
 ])
 
-def reduce_push_add_ones(src:UOp, r:UOp, view:UOp):
-  # contiguous, expand, and the same with ones removed
-  if unwrap(view.st).contiguous and len(r.shape) < len(view.shape) and \
-      tuple(x for x in r.shape if resolve(x != 1)) == tuple(x for x in view.shape if resolve(x != 1)):
-    new_shape: list[sint] = []
-    new_reduce_axis = []
-    if (contraction:=get_contraction_with_reduce(view.shape, r.shape, r.arg[1])) is None: return None
-    for i,pairs in enumerate(contraction):
-      new_shape_chunk = [view.shape[p] for p in pairs]
-      if i in r.arg[1]:
-        # if this is a reduce axis, we need a 1 in the view here to put it
-        assert len(new_shape_chunk) > 0
-        new_shape += [1]*(len(pairs)-1) + [src.shape[i]]
-        new_reduce_axis.append(len(new_shape)-1)
-      else:
-        # otherwise, pass through the new_shape_chunk
-        new_shape += new_shape_chunk
-    ret = r.replace(src=(src.reshape(tuple(new_shape)),), arg=(r.arg[0], tuple(new_reduce_axis))+r.arg[2:])
-    assert ret.shape == view.shape, f"shape mismatch on reduce_push_add_ones, {ret.shape} != {view.shape}"
-    return ret
-  return None
-
 view_left = merge_views+PatternMatcher([
   # view before elementwise and buffer ops
   (UPat(Ops.VIEW, src=(UPat({*GroupOp.ALU, Ops.CAST, Ops.BITCAST, Ops.BIND, Ops.LOAD, Ops.STORE, Ops.VALID}, name="e"),), name="view"),
    lambda e,view: e.replace(src=tuple(s.view(view.st) for s in e.src))),
-  # if there's ones added after reduce, put this before the reduce
-  (UPat(Ops.VIEW, src=(UPat(Ops.REDUCE_AXIS, src=(UPat.var("src"),), name="r"),), name="view"), reduce_push_add_ones),
 ])
 
 def apply_swizzle(u:UOp) -> UOp: return graph_rewrite(u, view_left, name="Sub View Left")
