@@ -283,9 +283,17 @@ def fuse_arange(root:UOp):
       else: q.extend(curr_children)
   return root.substitute(fuse_rep, name="fuse_arange") if fuse_rep else None
 
+def do_gradedge(x):
+  if not getenv("GRADFORK"): return x
+  if (x.op is not Ops.VIEW or x.src[0].op is not Ops.BUFFER):
+    return x.replace(src=tuple(y.gradedge() for y in x.src))
+  return x.alu(Ops.GRADEDGE)
+
 do_fuse = PatternMatcher([
   (UPat(Ops.FUSE, name="x"), do_fusion),
   (UPat(Ops.REDUCE_AXIS, name="root"), fuse_arange),
+
+  (UPat.var("x").gradedge(), do_gradedge),
 ])
 
 add_contiguous = PatternMatcher([(UPat(GroupOp.All-{Ops.CONTIGUOUS, Ops.ASSIGN}, name="x"),
@@ -317,7 +325,10 @@ finalize_contiguous = PatternMatcher([
   (UPat(Ops.VIEW, src=(UPat.var('x')), name="v"), lambda x,v: x.view(new_st) if (new_st:=v.arg.simplify()) != v.arg else None),
 ])
 
-remove_tags = PatternMatcher([(UPat(GroupOp.All, name="x"), lambda x: x.replace(tag=None) if x.tag is not None else None)])
+remove_tags = PatternMatcher([
+  (UPat(GroupOp.All, name="x"), lambda x: x.replace(tag=None) if x.tag is not None else None),
+  (UPat(Ops.GRADEDGE, name="x"), lambda x: x.src[0]),
+])
 
 @track_rewrites(name=lambda sink,ret: f"Schedule {pluralize('Kernel',len([u for u in ret[sink].toposort() if u.op is Ops.KERNEL]))}")
 def get_kernelize_map(sink:UOp) -> dict[UOp, UOp]:
