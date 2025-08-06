@@ -69,7 +69,9 @@ def group_realizes(sink:UOp) -> dict[UOp, None]:
   double_reduces: list[UOp] = []
   for r in toposort:
     if r.op is not Ops.REDUCE_AXIS: continue
-    if len(r.arg) == 3 and r.arg[2] is True: continue
+    if len(r.arg) == 3 and r.arg[2] is True:
+      raise
+      continue
     if FUSE_CONV_BW and r.src[0].base.op is Ops.REDUCE_AXIS and r.src[0] is not r.src[0].base: double_reduces.append(r)
     if r in realizes: continue
     group: dict[UOp, None] = {}
