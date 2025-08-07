@@ -52,6 +52,7 @@ def wrap_view_op(fn):
 view_ops = {
   "aten.view": Tensor.reshape,
   "aten._unsafe_view": Tensor.reshape,  # when are views unsafe, and do we care?
+  "aten._reshape_alias": Tensor.reshape,
   "aten.view.dtype": lambda self,dtype: self.bitcast(_from_torch_dtype(dtype)),
   "aten.expand": Tensor.expand,
   "aten.t": Tensor.transpose,
