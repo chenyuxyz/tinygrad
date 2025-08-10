@@ -399,7 +399,8 @@ class Tensor(MathTrait):
     print(t.shard((t.device, t.device), axis=1).uop)
     ```
     """
-    assert isinstance(self.device, str), "can't shard a MultiLazyBuffer"
+    if not isinstance(self.device, str): raise RuntimeError("can't shard a MultiLazyBuffer")
+    if len(devices) == 1: raise ValueError(f"can't shard to single device {devices}")
     devices = tuple(Device.canonicalize(x) for x in devices)
     mlb = self.uop.shard(devices, self._resolve_dim(axis)) if axis is not None else self.uop.copy_to_device(devices)
     return Tensor(mlb, device=devices, requires_grad=self.requires_grad)
