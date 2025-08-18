@@ -53,6 +53,16 @@ jobs:
         python -m venv venv
         source venv/bin/activate
         pip install $GITHUB_WORKSPACE
+
+        # Check installed package size
+        PKG_DIR=$(python -c "import tinygrad, os; print(os.path.dirname(tinygrad.__file__))")
+        SIZE=$(du -sk "$PKG_DIR" | cut -f1)
+        echo "Installed size: ${SIZE} KB"
+        if [ "$SIZE" -gt 1024 ]; then
+          echo "Package is too large (>1MB)"
+          exit 1
+        fi
+
         python -c "from tinygrad.tensor import Tensor; print(Tensor([1,2,3,4,5]))"
         pip install mypy
         mypy -c "from tinygrad.tensor import Tensor; print(Tensor([1,2,3,4,5]))"
