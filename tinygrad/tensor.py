@@ -1195,7 +1195,7 @@ class Tensor(MathTrait):
 
       # create index masks
       for dim, tensor in zip(dims, tensors):
-        try: i = tensor.reshape(tensor.shape + (1,)*(x.ndim - dims[0])).expand(pre_reduce_shape)
+        try: i = tensor.reshape(tensor.shape + (1,)*(x.ndim - dims[0]))#.expand(pre_reduce_shape)
         except ValueError as e: raise IndexError(f"cannot broadcast indices: {e}") from e
         masks.append(i._one_hot_along_dim(num_classes=x.shape[dim], dim=(dim - x.ndim)))
 
@@ -1205,7 +1205,10 @@ class Tensor(MathTrait):
       # inject 1's for the extra dims added in create masks
       reshape_arg = x.shape[:dims[0]] + (1,) * len(big_shape) + x.shape[dims[0]:]
       # sum reduce the extra dims introduced in create masks
-      x = (x.reshape(reshape_arg) * mask).sum(sum_axis:=tuple(d + len(big_shape) for d in dims), dtype=x.dtype)
+      x = x.reshape(reshape_arg)
+      for d,m in zip(dims, masks): x = (x * m).sum(d + len(big_shape), dtype=x.dtype, keepdim=True)
+      x = x.reshape(tuple(s for i,s in enumerate(x.shape) if i-len(big_shape) not in dims))
+      sum_axis = tuple(d + len(big_shape) for d in dims)
 
       # special permute case
       if dims[0] != 0 and len(dims) != 1 and tuple(dims) != tuple(range(dims[0], dims[-1]+1)):
