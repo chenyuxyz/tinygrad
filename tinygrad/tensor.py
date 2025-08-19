@@ -1191,11 +1191,12 @@ class Tensor(MathTrait):
     if tops := [(d,i) for d,i in enumerate(i_ for i_ in indices_parsed if not isinstance(i_['index'], int)) if isinstance(i['index'], Tensor)]:
       # unload the tensor object into actual tensors
       dims, tensors, masks = [d for d,_ in tops], cast(list[Tensor], [i['index'] for _,i in tops]), []
-      pre_reduce_shape = x.shape[:dims[0]] + (big_shape := _broadcast_shape(*(t.shape for t in tensors))) + x.shape[dims[0]:]
+      # TODO: only need len of big_shape
+      big_shape = _broadcast_shape(*(t.shape for t in tensors))
 
       # create index masks
       for dim, tensor in zip(dims, tensors):
-        try: i = tensor.reshape(tensor.shape + (1,)*(x.ndim - dims[0])).expand(pre_reduce_shape)
+        try: i = tensor.reshape(tensor.shape + (1,)*(x.ndim - dims[0]))
         except ValueError as e: raise IndexError(f"cannot broadcast indices: {e}") from e
         masks.append(i._one_hot_along_dim(num_classes=x.shape[dim], dim=(dim - x.ndim)))
 
