@@ -3034,7 +3034,7 @@ class Tensor(MathTrait):
     print(Tensor([-3., -2., -1., 0., 1., 2., 3.]).sigmoid().numpy())
     ```
     """
-    return (1 + (self * (-1/math.log(2))).exp2()).reciprocal()
+    return (1 + (-self).exp()).reciprocal()
 
   def logsigmoid(self) -> Tensor:
     """
