@@ -3099,7 +3099,7 @@ class Tensor(MathTrait):
     print(Tensor([0., math.pi/2, math.pi, 3*math.pi/2, 2*math.pi]).cos().numpy())
     ```
     """
-    return ((math.pi/2)-self).sin()
+    return (math.pi/2-self.cast(least_upper_dtype(self.dtype, dtypes.float32))).sin().cast(least_upper_float(self.dtype))
 
   def tan(self) -> Tensor:
     """
