@@ -17,7 +17,7 @@ print(settings.default)
 dtypes_float = (dtypes.float16, dtypes.float32, dtypes.float64)
 dtypes_int = (dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64, dtypes.uint8, dtypes.uint16, dtypes.uint32, dtypes.uint64)
 dtypes_bool = (dtypes.bool,)
-binary_operations = [operator.add, operator.sub, operator.mul, operator.lt, operator.eq]
+binary_operations = [operator.add, operator.sub, operator.mul, operator.truediv, operator.lt, operator.eq, (Tensor.maximum, np.maximum)]
 
 # TODO: LLVM comparing with nan is incorrect
 if Device.DEFAULT == "LLVM" or getenv("AMD_LLVM", 0):
@@ -27,12 +27,6 @@ integer_binary_operations = binary_operations + [(Tensor.bitwise_xor, np.bitwise
                                                  (Tensor.bitwise_or, np.bitwise_or), operator.mod]
 unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), (Tensor.sin, np.sin),
                     (Tensor.sqrt, np.sqrt), (Tensor.reciprocal, np.reciprocal)]
-
-# TODO: enable this (this is a dtype issue)
-#binary_operations.append(operator.truediv)
-
-# TODO: (a+b)/2 in tensor.py's maximum can overflow. This requires a new implementation of maximum that can be backpropagated
-#binary_operations += [(Tensor.maximum, np.maximum)]
 
 # TODO: CI CUDA segfaults on sin, WEBGPU sin is not precise enough for large numbers
 if (getenv("MOCKGPU") and Device.DEFAULT in {"NV", "CUDA"}) or Device.DEFAULT == "WEBGPU": unary_operations.remove((Tensor.sin, np.sin))
