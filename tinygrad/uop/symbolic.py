@@ -19,8 +19,9 @@ def simplify_pow(x:UOp, c:UOp) -> UOp|None:
 def fold_bitcast(root:UOp, c:UOp) -> UOp|None:
   if (from_fmt:=c.dtype.scalar().fmt) is None or (to_fmt:=root.dtype.scalar().fmt) is None: return None
   if c.dtype.itemsize != root.dtype.itemsize: return None
-  def convert(v:Any): return struct.unpack(to_fmt, struct.pack(from_fmt, v))[0]
-  return root.const_like(convert(c.arg) if root.dtype.count == 1 else tuple(map(convert, c.arg)))
+  if root.dtype.count > 1: raise
+  data = tuple(struct.unpack(f"{root.dtype.count}{to_fmt}", struct.pack(f"{root.dtype.count}{from_fmt}", c.arg)))
+  return root.const_like(data)
 
 symbolic_simple = PatternMatcher([
   # ** self folding **
