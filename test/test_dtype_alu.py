@@ -34,8 +34,8 @@ unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), (Tensor.sin, np.
 # TODO: (a+b)/2 in tensor.py's maximum can overflow. This requires a new implementation of maximum that can be backpropagated
 #binary_operations += [(Tensor.maximum, np.maximum)]
 
-# TODO: CI CUDA segfaults on sin, WEBGPU sin is not precise enough for large numbers
-if (getenv("MOCKGPU") and Device.DEFAULT in {"NV", "CUDA"}) or Device.DEFAULT == "WEBGPU": unary_operations.remove((Tensor.sin, np.sin))
+# TODO: WEBGPU sin is not precise enough for large numbers
+if Device.DEFAULT == "WEBGPU": unary_operations.remove((Tensor.sin, np.sin))
 
 class ht:
   float64 = strat.floats(width=64, allow_subnormal=False)
