@@ -822,7 +822,7 @@ jobs:
 
   testmetal2:
     name: MacOS (unit)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     env:
       IGNORE_OOB: 0
@@ -885,7 +885,7 @@ jobs:
 
   osxwebgpu:
     name: MacOS (WebGPU)
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
     - name: Checkout Code
