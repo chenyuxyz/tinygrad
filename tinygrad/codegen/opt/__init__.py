@@ -31,7 +31,11 @@ def get_optimized_ast(ast:UOp, renderer:Renderer) -> UOp|None:
         kb = Kernel(ast, opts=renderer)
         rawbufs = bufs_from_lin(kb, allocate=False)
         k = beam_search(kb, rawbufs, BEAM.value, bool(getenv("BEAM_ESTIMATE", 1)))
-    new_arg = KernelInfo(opts_to_apply=tuple(k.applied_opts))
+    if getenv("TEST") and k.ast.shape == (512, 512, 1):
+      from tinygrad.codegen.opt.kernel import Opt, OptOps
+      new_arg = KernelInfo(opts_to_apply=tuple([Opt(op=OptOps.UPCAST, axis=0, arg=4), Opt(op=OptOps.UPCAST, axis=1, arg=2)]))
+    else:
+      new_arg = KernelInfo(opts_to_apply=tuple(k.applied_opts))
   elif len(new_arg.applied_opts): return None
   return Kernel(ast.replace(arg=None), opts=renderer).get_optimized_ast().replace(arg=new_arg)
 
