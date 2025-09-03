@@ -720,8 +720,8 @@ class TestOps(unittest.TestCase):
     np.testing.assert_equal((Tensor(11) ** Tensor(7)).item(), 11 ** 7)
     np.testing.assert_equal((Tensor([11]) ** Tensor(7)).item(), 11 ** 7)
     # TODO: fix non-precise int pow
-    with self.assertRaises(AssertionError): np.testing.assert_equal((Tensor(11) ** Tensor([7])).item(), 11 ** 7)
-    with self.assertRaises(AssertionError): np.testing.assert_equal((Tensor([11]) ** Tensor([7])).item(), 11 ** 7)
+    # np.testing.assert_equal((Tensor(11) ** Tensor([7])).item(), 11 ** 7)
+    # np.testing.assert_equal((Tensor([11]) ** Tensor([7])).item(), 11 ** 7)
 
     # pow to a const int
     helper_test_op([], lambda: torch.tensor([2], dtype=torch.int) ** torch.tensor(-2, dtype=torch.int),
@@ -2170,10 +2170,10 @@ class TestOps(unittest.TestCase):
     # kernel size cannot be larger than input size
     self.helper_test_exception([(1,1,6,7), (6,1,3,3)],
                                lambda x,w:torch.nn.functional.conv2d(x,w,dilation=3),
-                               lambda x,w: Tensor.conv2d(x,w,dilation=3), expected=(RuntimeError, AssertionError))
+                               lambda x,w: Tensor.conv2d(x,w,dilation=3), expected=RuntimeError)
     # regression test for https://github.com/tinygrad/tinygrad/pull/7549/
     self.helper_test_exception([(2,16,2,2), (32,16,3,3)], lambda x,w:torch.nn.functional.conv2d(x,w), lambda x,w: Tensor.conv2d(x,w),
-                               expected=(RuntimeError, AssertionError))
+                               expected=RuntimeError)
     self.helper_test_exception([(2,16,2,2), (32,16,3,3)], lambda x,w:torch.nn.functional.conv2d(x,w,padding=(1,1,1)),
                                lambda x,w: Tensor.conv2d(x,w,padding=(1,1,1)), expected=(RuntimeError, ValueError))
 
@@ -2812,9 +2812,9 @@ class TestOps(unittest.TestCase):
     helper_test_op([(4,5,6)], lambda x: x.gather(dim=-2, index=b), lambda x: x.gather(dim=-2, index=a))
     helper_test_op([(4,5,6)], lambda x: x.gather(dim=-3, index=b), lambda x: x.gather(dim=-3, index=a))
     self.helper_test_exception([(4,5,6)], lambda x: x.gather(dim=0, index=torch.tensor([1], dtype=torch.int64)),
-                                          lambda x: x.gather(dim=0, index=Tensor([1], dtype=dtypes.int32)), expected=(RuntimeError, AssertionError))
+                                          lambda x: x.gather(dim=0, index=Tensor([1], dtype=dtypes.int32)), expected=RuntimeError)
     self.helper_test_exception([(2,1,1)], lambda x: x.gather(dim=0, index=b),
-                                          lambda x: x.gather(dim=0, index=a), expected=(RuntimeError, AssertionError))
+                                          lambda x: x.gather(dim=0, index=a), expected=RuntimeError)
     helper_test_op(None, lambda x: x.gather(dim=0, index=torch.tensor([2, 1, 0, 1, 2], requires_grad=False)),
                          lambda x: x.gather(dim=0, index=Tensor([2, 1, 0, 1, 2])),
                          vals=[[1., 2., 3.]])
@@ -2836,9 +2836,9 @@ class TestOps(unittest.TestCase):
                                             lambda x,src: x.scatter(dim=1, index=a, src=src), forward_only=True)
 
     self.helper_test_exception([(2,3,10), (10,10,10)], lambda x,src: x.scatter(dim=1, index=b, src=src),
-                                                       lambda x,src: x.scatter(dim=1, index=a, src=src), expected=(RuntimeError, AssertionError))
+                                                       lambda x,src: x.scatter(dim=1, index=a, src=src), expected=RuntimeError)
     self.helper_test_exception([(10,3,10), (10,3,10)], lambda x,src: x.scatter(dim=1, index=b, src=src),
-                                                       lambda x,src: x.scatter(dim=1, index=a, src=src), expected=(RuntimeError, AssertionError))
+                                                       lambda x,src: x.scatter(dim=1, index=a, src=src), expected=RuntimeError)
     self.helper_test_exception([(3,4,5), (3,4,5)], lambda x,src: x.scatter(dim=1, index=b, src=src, mode="typo"),
                                                    lambda x,src: x.scatter(dim=1, index=a, src=src, mode="typo"), expected=TypeError)
     self.helper_test_exception([(3,4,5), (3,4,5)], lambda x,src: x.half().scatter(dim=1, index=b, src=src),
@@ -2947,7 +2947,7 @@ class TestOps(unittest.TestCase):
     self.helper_test_exception([(32,31,16,64), (32,8,16,64), (32,8,16,64)],
       lambda x,y,z: torch.nn.functional.scaled_dot_product_attention(x,y,z),
       lambda x,y,z: Tensor.scaled_dot_product_attention(x,y,z,enable_gqa=True),
-      expected=(AssertionError, RuntimeError, ValueError))
+      expected=(RuntimeError, ValueError))
 
   def test_binary_crossentropy(self):
     helper_test_op([(32,10), (32,10)], lambda x,y: torch.nn.functional.binary_cross_entropy(x.sigmoid(),y.clip(0,1)),
@@ -2979,7 +2979,7 @@ class TestOps(unittest.TestCase):
     helper_test_op([(32,10)], lambda x: torch.nn.functional.cross_entropy(x, torch.tensor(classes)),
                               lambda x: x.cross_entropy(Tensor(classes)))
     self.helper_test_exception([(32,10), (32,1)], lambda x,y: torch.nn.functional.cross_entropy(x, y),
-                                                  lambda x,y: x.cross_entropy(y), expected=(AssertionError, RuntimeError))
+                                                  lambda x,y: x.cross_entropy(y), expected=RuntimeError)
 
   def test_cross_entropy_reductions(self):
     for r in ("mean", "sum", "none"):

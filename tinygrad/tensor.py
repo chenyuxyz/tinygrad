@@ -1298,9 +1298,10 @@ class Tensor(MathTrait):
     print(t.gather(1, Tensor([[0, 0], [1, 0]])).numpy())
     ```
     """
-    assert index.ndim == self.ndim, f"self.ndim must equal index.ndim, {self.ndim=}, {index.ndim=}"
+    if index.ndim != self.ndim: raise RuntimeError(f"self.ndim must equal index.ndim, {self.ndim=}, {index.ndim=}")
     dim = self._resolve_dim(dim)
-    assert all(s >= i for d,(s,i) in enumerate(zip(self.shape, index.shape)) if d != dim), "requires self.shape[d] >= index.shape[d] for all d != dim"
+    if not all(s >= i for d,(s,i) in enumerate(zip(self.shape, index.shape)) if d != dim):
+      raise RuntimeError("requires self.shape[d] >= index.shape[d] for all d != dim")
     index = index.to(self.device)
     x = self.shrink(tuple((0, i) if d != dim else None for d,i in enumerate(index.shape))).unsqueeze(-1).transpose(-1, dim)
     return (index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim]).where(x, 0)).sum(-1, dtype=self.dtype)
@@ -2280,7 +2281,7 @@ class Tensor(MathTrait):
     s_, d_ = make_tuple(stride, len(k_)), make_tuple(dilation, len(k_))
     assert len(k_) == len(s_) == len(d_), f"stride/dilation mismatch kernel:{k_} stride:{s_} dilation:{d_}"
     noop, i_ = [None] * (self.ndim-len(k_)), self.shape[-len(k_):]
-    assert all(resolve(d*(k-1)+1 <= i) for k,d,i in zip(k_,d_,i_)), "kernel size cannot be greater than actual input size"
+    if not all(resolve(d*(k-1)+1 <= i) for k,d,i in zip(k_,d_,i_)): raise RuntimeError("kernel size cannot be greater than actual input size")
     o_ = [ceildiv(i-d*(k-1), s) for i,d,k,s in zip(i_,d_,k_,s_)]
     if any(resolve(k > s) for k,s in zip(k_,s_)) or any(d != 1 for d in d_):
       # input size scaling factor to make sure shrink for stride is possible
@@ -2748,8 +2749,8 @@ class Tensor(MathTrait):
   def _pre_scatter(self, dim:int, index:Tensor, src:Tensor) -> tuple[Tensor, Tensor]:
     index, dim = index.to(self.device), self._resolve_dim(dim)
     assert index.ndim == self.ndim == src.ndim, f"self.ndim, index.ndim and src.ndim must all equal, {self.ndim=} {index.ndim=} {src.ndim=}"
-    assert all((d == dim or self_ >= index_) and src_ >= index_ for d,(self_,index_,src_) in enumerate(zip(self.shape, index.shape, src.shape))), \
-      f"All dimensions of {index.shape=} should be <= to all dimensions of {src.shape=} and all dimensions except dimension {dim} of {self.shape=}"
+    if not all(i <= c and (d == dim or i <= s) for d,(s,i,c) in enumerate(zip(self.shape, index.shape, src.shape))):
+      raise RuntimeError(f"All of {index.shape=} should be <= to all of {src.shape=} and all except dimension {dim} of {self.shape=}")
     if self.dtype != src.dtype: raise RuntimeError(f"expect {self.dtype=} to be equal to {src.dtype=}")
     # shrink src to index shape to shrink away the unused values
     src = src.shrink(tuple((0,s) for s in index.shape))
