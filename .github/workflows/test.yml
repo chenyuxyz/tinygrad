@@ -761,6 +761,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     env:
+      IGNORE_OOB: 0
       MOCKGPU: 1
       FORWARD_ONLY: 1
     steps:
