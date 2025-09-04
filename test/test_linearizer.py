@@ -1094,8 +1094,8 @@ class TestKernelOpts(unittest.TestCase):
   def test_local_and_grouped_reduce(self):
     N = 128
     Tensor.manual_seed(1882)
-    a = Tensor.rand(4, 4, N, N)
-    b = Tensor.rand(4, 4, N)
+    a = Tensor.rand(4, 4, N, N).realize()
+    b = Tensor.rand(4, 4, N).realize()
     r = (b.sqrt() + ((a+1).sum(axis=3).exp()))
     helper_linearizer_opt(r, [
       [Opt(OptOps.LOCAL, 0, 2)],
@@ -1120,8 +1120,8 @@ class TestKernelOpts(unittest.TestCase):
   def test_upcasts(self):
     N = 16
     Tensor.manual_seed(1772)
-    a = Tensor.rand(N, N)
-    b = Tensor.rand(N, N)
+    a = Tensor.rand(N, N).realize()
+    b = Tensor.rand(N, N).realize()
     r = (a+b).sqrt() * ((a+1).exp())
     helper_linearizer_opt(r, [
       [Opt(OptOps.UPCAST, 0, 2)],
@@ -1131,8 +1131,8 @@ class TestKernelOpts(unittest.TestCase):
 
   def test_full_upcast(self):
     Tensor.manual_seed(1772)
-    a = Tensor.rand(4)
-    b = Tensor.rand(4)
+    a = Tensor.rand(4).realize()
+    b = Tensor.rand(4).realize()
     r = (a+b).sqrt() * ((a+1).exp())
     helper_linearizer_opt(r, [
       [Opt(OptOps.UPCAST, 0, 4)], # Checking how it works with upcasts
@@ -1143,8 +1143,8 @@ class TestKernelOpts(unittest.TestCase):
   def test_matmul(self):
     N = 128
     Tensor.manual_seed(1552)
-    a = Tensor.rand(N, N)
-    b = Tensor.rand(N, N)
+    a = Tensor.rand(N, N).realize()
+    b = Tensor.rand(N, N).realize()
     r = a@b
     helper_linearizer_opt(r, [
       [Opt(OptOps.UPCAST, 0, 2)],
@@ -1172,7 +1172,7 @@ class TestKernelOpts(unittest.TestCase):
   def test_double_reduce(self):
     N = 128
     Tensor.manual_seed(1552)
-    a = Tensor.rand(8, N, 8, N)
+    a = Tensor.rand(8, N, 8, N).realize()
     r = a.sum(axis=(1,3))
     helper_linearizer_opt(r, [
       # openCL / GPU=1 is 256 max threads
@@ -1199,7 +1199,7 @@ class TestKernelOpts(unittest.TestCase):
   def test_tensor_core_opts(self):
     N = 128
     Tensor.manual_seed(1552)
-    a, b = Tensor.rand(N, N, dtype=dtypes.half), Tensor.rand(N, N, dtype=dtypes.half)
+    a, b = Tensor.rand(N, N, dtype=dtypes.half).realize(), Tensor.rand(N, N, dtype=dtypes.half).realize()
     r = a.matmul(b, dtype=dtypes.half)
     atol, rtol = 0.25, 0.01
     helper_linearizer_opt(r, [
@@ -1224,7 +1224,7 @@ class TestKernelOpts(unittest.TestCase):
   def test_tensor_core_opts_locals(self):
     N = 128
     Tensor.manual_seed(1552)
-    a, b = Tensor.rand(N, N, dtype=dtypes.half), Tensor.rand(N, N, dtype=dtypes.half)
+    a, b = Tensor.rand(N, N, dtype=dtypes.half).realize(), Tensor.rand(N, N, dtype=dtypes.half).realize()
     r = a.matmul(b, dtype=dtypes.half)
     atol, rtol = 0.25, 0.01
     helper_linearizer_opt(r, [
@@ -1245,7 +1245,7 @@ class TestKernelOpts(unittest.TestCase):
   def test_tensor_core_opts_group(self):
     N = 128
     Tensor.manual_seed(1552)
-    a, b = Tensor.rand(N, N, dtype=dtypes.half), Tensor.rand(N, N, dtype=dtypes.half)
+    a, b = Tensor.rand(N, N, dtype=dtypes.half).realize(), Tensor.rand(N, N, dtype=dtypes.half).realize()
     r = a.matmul(b, dtype=dtypes.half)
     atol, rtol = 0.25, 0.01
     helper_linearizer_opt(r, [
@@ -1263,8 +1263,8 @@ class TestKernelOpts(unittest.TestCase):
       self.skipTest("super slow on CUDA and AMD because of the big grid dims")
     N = 17 * 17
     Tensor.manual_seed(289)
-    a = Tensor.rand(N, N)
-    b = Tensor.rand(N, N)
+    a = Tensor.rand(N, N).realize()
+    b = Tensor.rand(N, N).realize()
     helper_linearizer_opt(a@b, [
       [Opt(OptOps.PADTO, 0, 32)],
       [Opt(OptOps.PADTO, 1, 32)],
@@ -1277,8 +1277,8 @@ class TestKernelOpts(unittest.TestCase):
 
   def test_padto_upcasted_not_ok(self):
     N = 4
-    a = Tensor.rand(N, N)
-    b = Tensor.rand(N, N)
+    a = Tensor.rand(N, N).realize()
+    b = Tensor.rand(N, N).realize()
     helper_linearizer_opt(a@b, [
       [Opt(OptOps.UPCAST, 0, 0)],
       [Opt(OptOps.UPCAST, 1, 0)],
