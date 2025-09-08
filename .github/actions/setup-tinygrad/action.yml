@@ -254,6 +254,7 @@ runs:
         mkdir build
         cd build
         cmake .. -Wno-dev -G Ninja -DOCELOT_BUILD_TOOLS=OFF -DCMAKE_BUILD_ALWAYS=0 -DBUILD_TESTS_CUDA=OFF \
+          -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG" \
           -DBoost_INCLUDE_DIR=$(brew --prefix boost)/include -DBoost_LIBRARY_DIR=$(brew --prefix boost)/lib -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         ninja
     - name: Install gpuocelot
