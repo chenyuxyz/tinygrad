@@ -40,7 +40,7 @@ def cuda_disassemble(lib:bytes, arch:str):
 
 class CUDACompiler(Compiler):
   def __init__(self, arch:str, cache_key:str="cuda"):
-    self.arch, self.compile_options = arch, [f'--gpu-architecture={arch}', "--disable-warnings"]
+    self.arch, self.compile_options = arch, [f'--gpu-architecture={arch}']
     self.compile_options += [f"-I{CUDA_PATH}/include"] if CUDA_PATH else ["-I/usr/local/cuda/include", "-I/usr/include", "-I/opt/cuda/include"]
     nvrtc_check(nvrtc.nvrtcVersion((nvrtcMajor := ctypes.c_int()), (nvrtcMinor := ctypes.c_int())))
     if (nvrtcMajor.value, nvrtcMinor.value) >= (12, 4): self.compile_options.append("--minimal")
