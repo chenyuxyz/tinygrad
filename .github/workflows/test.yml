@@ -4,7 +4,7 @@ env:
   DOWNLOAD_CACHE_VERSION: '12'
   PYTHON_CACHE_VERSION: '3'
   APT_CACHE_VERSION: '1'
-  BUILD_CACHE_VERSION: '1'
+  BUILD_CACHE_VERSION: '4'
   CAPTURE_PROCESS_REPLAY: 1
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   PYTHONPATH: ${{ github.workspace }}
@@ -683,6 +683,7 @@ jobs:
     env:
       MOCKGPU: 1
       FORWARD_ONLY: 1
+      OCELOT_EXECUTION_MODE: 'llvm'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
