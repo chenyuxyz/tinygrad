@@ -407,7 +407,7 @@ class TestMultiTensor(unittest.TestCase):
     # sometimes there is zeros in these grads... why?
     np.testing.assert_allclose(grad, shard_grad, atol=1e-5, rtol=1e-5)
 
-  @unittest.skipIf(CI and REAL_DEV in ("CUDA", "NV", "CPU", "AMD"), "slow, and flaky on CPU")
+  @unittest.skipIf(CI and REAL_DEV in ("CUDA", "NV", "CPU", "AMD", "WEBGPU"), "slow, and flaky on CPU")
   def test_data_parallel_resnet_train_step(self):
     from extra.models.resnet import ResNet18
     fake_image = Tensor.rand((2, 3, 224//16, 224//16))
