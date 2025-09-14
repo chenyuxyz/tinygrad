@@ -159,6 +159,16 @@ class TestSymbolicReshape(unittest.TestCase):
     new_shape = (2, (Variable('start_pos', 1, 128)+1), 16, 64)
     assert view.reshape(new_shape) is None
 
+  def test_invalid_symbolic_reshape(self):
+    a = Tensor.rand(3)
+    vi = Variable("i", 1, 10).bind(3)
+    # cannot reshape from non-symbolic to symbolic
+    with self.assertRaises(ValueError): a.reshape((vi,))
+    # cannot reshape from symbolic to non-symbolic
+    t = a.shrink(((0, vi),))
+    self.assertEqual(t.shape, (vi,))
+    with self.assertRaises(ValueError): t.reshape((3,))
+
 class TestSymbolicExpand(unittest.TestCase):
   def test_expand_into_symbols(self):
     vi = Variable("i", 1, 5).bind(3)
@@ -197,7 +207,7 @@ class TestSymbolicShrink(unittest.TestCase):
 class TestSymbolicPad(unittest.TestCase):
   def test_pad(self):
     v = Variable("v", 1, 100).bind(5)
-    t = Tensor.ones(100)[:v].pad(((4, 0),))
+    t = Tensor.ones(100)[:v].pad(((9-v, 0),))
     t = t.reshape(9)
     assert t.tolist() == [0,0,0,0,1,1,1,1,1]
 
