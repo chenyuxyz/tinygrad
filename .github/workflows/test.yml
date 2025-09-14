@@ -4,7 +4,7 @@ env:
   DOWNLOAD_CACHE_VERSION: '12'
   PYTHON_CACHE_VERSION: '3'
   APT_CACHE_VERSION: '1'
-  BUILD_CACHE_VERSION: '1'
+  BUILD_CACHE_VERSION: '2'
   CAPTURE_PROCESS_REPLAY: 1
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   PYTHONPATH: ${{ github.workspace }}
@@ -668,7 +668,7 @@ jobs:
         backend: [ptx, nv]
 
     name: Linux (${{ matrix.backend }})
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       MOCKGPU: 1
