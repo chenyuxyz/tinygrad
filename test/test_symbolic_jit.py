@@ -5,29 +5,6 @@ from tinygrad import Variable, Tensor, TinyJit
 import numpy as np
 
 class TestSymbolicJit(unittest.TestCase):
-  def test_plus1(self):
-    def f(a): return (a+1).realize()
-    jf = TinyJit(f)
-    a = Tensor.rand(3, 10)
-    for i in range(1, 5):
-      vi = Variable("i", 1, 10).bind(i)
-      symbolic = jf(a[:, :vi]).reshape(3, i).numpy()
-      expected = f(a[:, :i]).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
-
-  def test_add(self):
-    def f(a, b): return (a+b).realize()
-    jf = TinyJit(f)
-    a = Tensor.rand(3, 10)
-    b = Tensor.rand(3, 10)
-    for i in range(1, 5):
-      vi = Variable("i", 1, 10).bind(i)
-      symbolic = jf(a[:, :vi], b[:, :vi]).reshape(3, i).numpy()
-      expected = f(a[:, :i], b[:, :i]).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
-
   def test_matmul(self):
     def f(a, b): return (a@b).realize()
     jf = TinyJit(f)
@@ -67,86 +44,6 @@ class TestSymbolicJit(unittest.TestCase):
       expected = f(q, k[:, :i], v[:, :i]).numpy()
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
     assert_jit_cache_len(jf, 5)
-
-  def test_cat_dim0(self):
-    def f(a, b): return a.cat(b, dim=0).realize()
-    jf = TinyJit(f)
-    a = Tensor.rand(10, 3)
-    b = Tensor.rand(2, 3)
-    for i in range(1, 5):
-      vi = Variable("i", 1, 10).bind(i)
-      symbolic = jf(a[:vi], b).reshape(i+2, 3).numpy()
-      expected = f(a[:i], b).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
-
-  def test_cat_dim1(self):
-    def f(a, b): return a.cat(b, dim=1).realize()
-    jf = TinyJit(f)
-    a = Tensor.rand(3, 10)
-    b = Tensor.rand(3, 2)
-    for i in range(1, 5):
-      vi = Variable("i", 1, 10).bind(i)
-      symbolic = jf(a[:, :vi], b).reshape(3, i+2).numpy()
-      expected = f(a[:, :i], b).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
-
-  def test_cat_dim0_two_vars(self):
-    def f(a, b): return a.cat(b, dim=0).realize()
-    jf = TinyJit(f)
-    a = Tensor.rand(10, 3)
-    b = Tensor.rand(10, 3)
-    for i in range(2, 5):
-      for j in range(2, 5):
-        vi = Variable("i", 1, 10).bind(i)
-        vj = Variable("j", 1, 10).bind(j)
-        symbolic = jf(a[:vi], b[:vj]).reshape(i+j, 3).numpy()
-        expected = f(a[:i], b[:j]).numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
-
-  def test_cat_dim1_two_vars(self):
-    def f(a, b): return a.cat(b, dim=1).realize()
-    jf = TinyJit(f)
-    a = Tensor.rand(3, 10)
-    b = Tensor.rand(3, 10)
-    for i in range(2, 5):
-      for j in range(2, 5):
-        vi = Variable("i", 1, 10).bind(i)
-        vj = Variable("j", 1, 10).bind(j)
-        symbolic = jf(a[:, :vi], b[:, :vj]).reshape(3, i+j).numpy()
-        expected = f(a[:, :i], b[:, :j]).numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
-
-  def test_two_vars_plus1_ij(self):
-    def f(a, b): return (a@b+1).realize()
-    jf = TinyJit(f)
-    a = Tensor.rand(10, 3)
-    b = Tensor.rand(3, 10)
-    for i in range(2, 5):
-      for j in range(2, 5):
-        vi = Variable("i", 1, 10).bind(i)
-        vj = Variable("j", 1, 10).bind(j)
-        symbolic = jf(a[:vi, :], b[:, :vj]).reshape(i, j).numpy()
-        expected = f(a[:i, :], b[:, :j]).numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
-
-  def test_two_vars_plus1_ji(self):
-    def f(a, b): return (a@b+1).realize()
-    jf = TinyJit(f)
-    a = Tensor.rand(10, 3)
-    b = Tensor.rand(3, 10)
-    for i in range(2, 5):
-      for j in range(2, 5):
-        vi = Variable("i", 1, 10).bind(i)
-        vj = Variable("j", 1, 10).bind(j)
-        symbolic = jf(a[:vj, :], b[:, :vi]).reshape(j, i).numpy()
-        expected = f(a[:j, :], b[:, :i]).numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
 
   def test_jit_symbolic_shape_mismatch(self):
     @TinyJit
@@ -188,18 +85,6 @@ class TestSymbolicJit(unittest.TestCase):
       np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
     assert_jit_cache_len(jf, 1)
 
-  def test_slice_var_shape(self):
-    def f(a): return (a+1).realize()
-    jf = TinyJit(f)
-    for i in range(1, 5):
-      vi = Variable("i", 1, 10).bind(i)
-      a = Tensor.ones(vi, 11).contiguous()
-      symbolic = a[:, 1:2]
-      symbolic = jf(symbolic).reshape(i, 1).numpy()
-      expected = f(a.reshape(i, 11)[:, 1:2]).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-    assert_jit_cache_len(jf, 1)
-
   def test_ones_sum(self):
     def f(a): return a.sum().realize()
     jf = TinyJit(f)
@@ -209,110 +94,6 @@ class TestSymbolicJit(unittest.TestCase):
       symbolic = jf(t[:vi]).item()
       expected = f(t[:i]).item()
       np.testing.assert_equal(symbolic, expected)
-
-  def test_mean(self):
-    def f(a): return a.mean().realize()
-    def f0(a): return a.mean(0).realize()
-    def f1(a): return a.mean(1).realize()
-    jf = TinyJit(f)
-    jf0 = TinyJit(f0)
-    jf1 = TinyJit(f1)
-    a = Tensor.rand(10, 3)
-    b = Tensor.rand(10, 3)
-    c = Tensor.rand(10, 3)
-    for i in range(1, 5):
-      vi = Variable("i", 1, 10).bind(i)
-      # axis = None
-      symbolic = jf(a[:vi]).numpy()
-      expected = a[:i].mean().numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-      # axis = 0
-      symbolic = jf0(b[:vi]).numpy()
-      expected = b[:i].mean(0).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-      # axis = 1
-      symbolic = jf1(c[:vi]).reshape(i).numpy()
-      expected = c[:i].mean(1).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-
-  def test_mean_2d(self):
-    def f(a): return a.mean().realize()
-    def f0(a): return a.mean(0).realize()
-    def f1(a): return a.mean(1).realize()
-    jf = TinyJit(f)
-    jf0 = TinyJit(f0)
-    jf1 = TinyJit(f1)
-    a = Tensor.rand(10, 10)
-    b = Tensor.rand(10, 10)
-    c = Tensor.rand(10, 10)
-    for i in range(2, 5):
-      for j in range(2, 5):
-        vi = Variable("i", 1, 10).bind(i)
-        vj = Variable("j", 1, 10).bind(j)
-        # axis = None
-        symbolic = jf(a[:vi, :vj]).numpy()
-        expected = a[:i, :j].mean().numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-        # axis = 0
-        symbolic = jf0(b[:vi, :vj]).reshape(j).numpy()
-        expected = b[:i, :j].mean(0).numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-        # axis = 1
-        symbolic = jf1(c[:vi, :vj]).reshape(i).numpy()
-        expected = c[:i, :j].mean(1).numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-
-  def test_var(self):
-    def f(a): return a.var().realize()
-    def f0(a): return a.var(0).realize()
-    def f1(a): return a.var(1).realize()
-    jf = TinyJit(f)
-    jf0 = TinyJit(f0)
-    jf1 = TinyJit(f1)
-    a = Tensor.rand(10, 3)
-    b = Tensor.rand(10, 3)
-    c = Tensor.rand(10, 3)
-    for i in range(1, 5):
-      vi = Variable("i", 1, 10).bind(i)
-      # axis = None
-      symbolic = jf(a[:vi]).numpy()
-      expected = a[:i].var().numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-      # axis = 0
-      symbolic = jf0(b[:vi]).numpy()
-      expected = b[:i].var(0).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-      # axis = 1
-      symbolic = jf1(c[:vi]).reshape(i).numpy()
-      expected = c[:i].var(1).numpy()
-      np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-
-  def test_var_2d(self):
-    def f(a): return a.var().realize()
-    def f0(a): return a.var(0).realize()
-    def f1(a): return a.var(1).realize()
-    jf = TinyJit(f)
-    jf0 = TinyJit(f0)
-    jf1 = TinyJit(f1)
-    a = Tensor.rand(10, 10)
-    b = Tensor.rand(10, 10)
-    c = Tensor.rand(10, 10)
-    for i in range(2, 5):
-      for j in range(2, 5):
-        vi = Variable("i", 1, 10).bind(i)
-        vj = Variable("j", 1, 10).bind(j)
-        # axis = None
-        symbolic = jf(a[:vi, :vj]).numpy()
-        expected = a[:i, :j].var().numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-        # axis = 0
-        symbolic = jf0(b[:vi, :vj]).reshape(j).numpy()
-        expected = b[:i, :j].var(0).numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
-        # axis = 1
-        symbolic = jf1(c[:vi, :vj]).reshape(i).numpy()
-        expected = c[:i, :j].var(1).numpy()
-        np.testing.assert_allclose(symbolic, expected, atol=1e-6, rtol=1e-6)
 
 if __name__ == '__main__':
   unittest.main()

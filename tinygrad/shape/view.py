@@ -314,8 +314,9 @@ class View:
     # check for the same size
     if all_int(self.shape):
       # reshapes cannot introduce symbolic shape
-      assert all_int(new_shape), f"{self.shape=} -> {new_shape=} contains non int dims"
+      if not all_int(new_shape): raise ValueError(f"{self.shape=} -> {new_shape=} contains non int dims")
       if prod(self.shape) != prod(new_shape): raise ValueError(f"size mismatched, can't reshape {self.shape=} -> {new_shape=}")
+    elif all_int(new_shape): raise ValueError(f"{self.shape=} -> {new_shape=} reshapes from symbolic to int dims")
 
     if 0 in self.shape: return View.create(new_shape)
     if new_shape == () and self.mask and any(mx==my for (mx,my) in self.mask): return None
