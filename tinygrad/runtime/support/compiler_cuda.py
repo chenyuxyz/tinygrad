@@ -1,6 +1,6 @@
 import subprocess, hashlib, tempfile, ctypes, ctypes.util, re, pathlib
 from typing import Callable
-from tinygrad.helpers import to_char_p_p, colored, init_c_var, getenv
+from tinygrad.helpers import to_char_p_p, colored, init_c_var, getenv, CI
 import tinygrad.runtime.autogen.nvrtc as nvrtc
 from tinygrad.device import Compiler, CompileError
 
@@ -40,10 +40,12 @@ def cuda_disassemble(lib:bytes, arch:str):
 
 class CUDACompiler(Compiler):
   def __init__(self, arch:str, cache_key:str="cuda"):
-    print(f"{arch=}")
     self.arch, self.compile_options = arch, [f'--gpu-architecture={arch}']
+    if CI and arch == "sm_35": self.compile_options = []
     self.compile_options += [f"-I{CUDA_PATH}/include"] if CUDA_PATH else ["-I/usr/local/cuda/include", "-I/usr/include", "-I/opt/cuda/include"]
     nvrtc_check(nvrtc.nvrtcVersion((nvrtcMajor := ctypes.c_int()), (nvrtcMinor := ctypes.c_int())))
+    print(f"{arch=}")
+    print((nvrtcMajor.value, nvrtcMinor.value))
     if (nvrtcMajor.value, nvrtcMinor.value) >= (12, 4): self.compile_options.append("--minimal")
     super().__init__(f"compile_{cache_key}_{self.arch}")
   def _compile_program(self, src:str, nvrtc_get_content:Callable, nvrtc_get_size:Callable) -> bytes:
