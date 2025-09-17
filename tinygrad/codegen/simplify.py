@@ -35,7 +35,7 @@ def simplify_merge_adjacent(u:UOp) -> UOp|None:
   return u
 
 pm_simplify_ranges = PatternMatcher([
-  (UPat((Ops.STORE, Ops.REDUCE), name="u"), simplify_merge_adjacent),
+  # (UPat((Ops.STORE, Ops.REDUCE), name="u"), simplify_merge_adjacent),
 ])
 
 # **** reduce simplification ****
