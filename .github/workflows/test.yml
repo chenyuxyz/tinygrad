@@ -529,7 +529,7 @@ jobs:
           test/test_tiny.py test/test_rangeify.py test/test_ops.py test/test_tensor_variable.py \
           test/test_outerworld_range.py test/test_sample.py test/test_randomness.py test/test_nn.py test/test_arange.py
     - name: Test const folding
-      run: CPU=1 RANGEIFY=1 python3 -m pytest -n auto --durations 20 test/test_const_folding.py -k "not test_cast_padded and not TestReduceOpsConstFolding and not TestMultiConstFolding"
+      run: CPU=1 RANGEIFY=1 python3 -m pytest -n auto --durations 20 test/test_const_folding.py -k "not test_cast_padded and and not TestMultiConstFolding"
     - name: Test multitensor
       run: CPU=1 RANGEIFY=1 python3 test/test_multitensor.py TestMultiTensor.test_matmul_shard_1_1 TestMultiTensor.test_simple_add_W
     - name: Test CPU=1 RANGEIFY=2
