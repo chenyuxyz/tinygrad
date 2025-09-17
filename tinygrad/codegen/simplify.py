@@ -40,15 +40,15 @@ pm_simplify_ranges = PatternMatcher([
 
 # **** reduce simplification ****
 
-def reduce_rangeless(red:UOp):
-  # TODO: share code with reduce_unparented
-  if red.arg not in {Ops.ADD, Ops.MAX}: return None
-  if red.src[0].dtype != red.dtype: return None
-  if any(x.op in {Ops.RANGE} for x in red.src[0].toposort()): return None
-  ret = red.src[0]
+def reduce_unparented(red:UOp):
+  if red.arg not in {Ops.ADD, Ops.MAX, Ops.MUL}: return None
+  reduce_parented, reduce_unparented = partition(red.src[1:], lambda x: x in red.src[0].sparents)
+  if len(reduce_unparented) == 0: return None
+  ret = red.replace(src=(red.src[0],)+tuple(reduce_parented)) if len(reduce_parented) or red.dtype != red.src[0].dtype else red.src[0]
   if red.arg is Ops.ADD:
-    for r in red.src[1:]:
-      ret = ret * r.src[0].cast(ret.dtype.scalar()).broadcast(ret.dtype.count)
+    for r in reduce_unparented: ret = ret * r.src[0].cast(ret.dtype.scalar()).broadcast(ret.dtype.count)
+  if red.arg is Ops.MUL:
+    for r in reduce_unparented: ret = ret ** r.src[0].cast(ret.dtype.scalar()).broadcast(ret.dtype.count)
   return ret
 
 def no_range(u:UOp) -> bool: return not any(x.op is Ops.RANGE for x in u.sparents)
@@ -85,7 +85,7 @@ pm_reduce_collapse = PatternMatcher([
    .where(UPat.cvar("c"), 0).reduce(arg=Ops.ADD, allow_any_len=True, name="r"),
     lambda x,y,c,r: y.where(c, 0).reduce(*r.src[1:], arg=Ops.ADD)*x.cast(c.dtype)),
   # remove REDUCEs that no longer have a RANGE in the src
-  (UPat(Ops.REDUCE, name="red"), reduce_rangeless),
+  (UPat(Ops.REDUCE, name="red"), reduce_unparented),
 ])+sym
 
 def reduce_collapse(red:UOp):
@@ -101,20 +101,7 @@ def reduce_collapse(red:UOp):
   if any(x.op is Ops.RANGE for x in sink.toposort()): return None
   return sink.substitute({v:k for k,v in replaces.items()})
 
-def reduce_unparented(red:UOp):
-  if red.arg not in {Ops.ADD, Ops.MAX, Ops.MUL}: return None
-  reduce_parented, reduce_unparented = partition(red.src[1:], lambda x: x in red.src[0].sparents)
-  if len(reduce_unparented) == 0: return None
-  ret = red.replace(src=(red.src[0],)+tuple(reduce_parented)) if len(reduce_parented) or red.dtype != red.src[0].dtype else red.src[0]
-  if red.arg is Ops.ADD:
-    for r in reduce_unparented: ret = ret * r.src[0].cast(ret.dtype.scalar()).broadcast(ret.dtype.count)
-  if red.arg is Ops.MUL:
-    for r in reduce_unparented: ret = ret ** r.src[0].cast(ret.dtype.scalar()).broadcast(ret.dtype.count)
-  return ret
-
 pm_reduce_simplify = PatternMatcher([
-  # remove any ranges from a REDUCE that aren't referenced in the reduce source
-  (UPat(Ops.REDUCE, name="red"), reduce_unparented),
   # remove REDUCE without loads (generic arange opt / indexing). TODO: support multi range
   (UPat(Ops.REDUCE, src=(UPat(), UPat()), name="red"), reduce_collapse),
 ])
