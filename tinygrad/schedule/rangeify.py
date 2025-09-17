@@ -13,12 +13,7 @@ from tinygrad.uop.ops import track_rewrites, graph_rewrite, identity_element, si
 # *****************
 # 0. do some cleanup rewrites, mostly copied from the old stuff
 
-double_reshape = PatternMatcher([
-  # RESHAPE on RESHAPE is the second reshape
-  (UPat(Ops.RESHAPE, src=(UPat(Ops.RESHAPE),), name="x"), lambda x: x.replace(src=(x.src[0].src[0],))),
-])
-
-earliest_rewrites = double_reshape+PatternMatcher([
+earliest_rewrites = PatternMatcher([
   # non shape changing RESHAPE is NOOP
   #(UPat(Ops.RESHAPE, name="x"), lambda x: x.src[0] if x.src[0].shape == x.arg else None),
   # DETACH and CONTIGUOUS_BACKWARD are NOOPs here, so is FUSE
@@ -381,7 +376,7 @@ def remove_bufferize(src:UOp, buf:UOp, idx:UOp):
   # this is the ranges replaced
   return src.substitute(dict(zip(buf.src[1:], idx.src[1:])))
 
-pm_cleanups = double_reshape+pm_mops+PatternMatcher([
+pm_cleanups = pm_mops+PatternMatcher([
   #(UPat(Ops.BUFFERIZE, name="b"), cleanup_dead_axes),
   # remove noop buffers. if we look at the next index we can remove even more of these
   # NOTE: this is mostly the same case as below, but if there's no INDEX this gets more
