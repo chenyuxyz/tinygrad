@@ -106,11 +106,8 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
 
   def f(self, op, **kwargs): return UOp(op, dtype=kwargs.pop("dtype", self.dtype), src=(self,), **kwargs)
 
-  @functools.cached_property
-  def parents(self:UOp) -> dict[UOp, None]:
-    ret = {s:None for s in self.src}
-    for s in self.src: ret.update(s.parents)
-    return ret
+  @property
+  def parents(self:UOp) -> dict[UOp, None]: return self.toposort()
   @property
   def sparents(self:UOp) -> dict[UOp, None]: return {self:None, **self.parents}
 
