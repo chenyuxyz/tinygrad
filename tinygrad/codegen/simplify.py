@@ -53,7 +53,7 @@ def reduce_rangeless(red:UOp):
 
 def no_range(u:UOp) -> bool: return not any(x.op is Ops.RANGE for x in u.sparents)
 
-def reduce_on_add(x:UOp, y:UOp, r:UOp): return x.reduce(*r.src[1:], arg=Ops.ADD) + y.reduce(*r.src[1:],arg=Ops.ADD)
+def reduce_on_add(x:UOp, y:UOp, r:UOp): raise#return x.reduce(*r.src[1:], arg=Ops.ADD) + y.reduce(*r.src[1:],arg=Ops.ADD)
 
 pm_reduce_collapse = PatternMatcher([
   # lift x+y out of reduce on lt
