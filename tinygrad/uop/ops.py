@@ -114,7 +114,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     for s in self.src: ret.update(s.parents)
     return ret
   @property
-  def sparents(self:UOp) -> dict[UOp, None]: return {self:None, **self.parents}
+  def sparents(self:UOp) -> dict[UOp, None]: return self.toposort()
 
   def toposort(self, gate:Callable|None=None) -> dict[UOp, None]:
     ret: dict[UOp, None] = {}
