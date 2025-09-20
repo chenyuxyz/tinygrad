@@ -573,6 +573,12 @@ jobs:
         deps: testing
     - name: Test METAL=1 RANGEIFY=1
       run: METAL=1 RANGEIFY=1 python -m pytest -n=auto test/test_ops.py --durations=20
+    - name: Test Assign
+      # some of these behave differently on different device
+      run: |
+        METAL=1 RANGEIFY=1 python -m pytest -n=auto test/test_assign.py -k "not test_post_permuted_assignment and not test_permuted_assignment_masked_view_not_contiguous and not test_assign_diamond_cycle" --durations=20
+        CL=1 RANGEIFY=1 python -m pytest -n=auto test/test_assign.py -k "not test_post_permuted_assignment and not test_permuted_assignment_masked_view_not_contiguous and not test_assign_diamond_cycle" --durations=20
+        CPU=1 RANGEIFY=1 python -m pytest -n=auto test/test_assign.py -k "not test_post_permuted_assignment and not test_permuted_assignment_masked_view_not_contiguous and not test_assign_diamond_cycle" --durations=20
 
   testdevectorize:
     name: Linux (devectorize)
