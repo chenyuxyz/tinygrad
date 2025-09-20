@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 import unittest
+from contextlib import nullcontext
 import numpy as np
 from tinygrad import dtypes, Tensor, TinyJit, GlobalCounters, Variable
 from tinygrad.device import is_dtype_supported
-from tinygrad.helpers import temp
+from tinygrad.helpers import temp, RANGEIFY
 
 N = 200  # has to be bigger than the cache to fail
 
@@ -125,7 +126,7 @@ class TestAssign(unittest.TestCase):
       times_a = a*3
       a.assign(Tensor.full((4,), 2.).contiguous())
       new = a + (times_a-1)
-      np.testing.assert_allclose(new.numpy(), 4)
+      np.testing.assert_allclose(new.numpy(), [4,4,4,4])
 
   def test_assign_diamond_contiguous_cycle(self):
     with self.assertRaisesRegex(RuntimeError, "cycle"):
@@ -277,7 +278,7 @@ class TestAssign(unittest.TestCase):
     #GlobalCounters.cache = []
     ba1 = a.uop.base.realized # noqa: F841
     bb1 = b.uop.base.realized # noqa: F841
-    with self.assertRaisesRegex(RuntimeError, "contiguous"):
+    with nullcontext() if RANGEIFY else self.assertRaisesRegex(RuntimeError, "contiguous"):
       a.assign(a.permute(1,0) + b)   # this should not work!
       a.realize()
       ba2 = a.uop.base.realized # noqa: F841
@@ -310,7 +311,7 @@ class TestAssign(unittest.TestCase):
     a = Tensor.arange(4 * 4).reshape(4, 4).contiguous().realize()
     b = Tensor.arange(4 * 4).reshape(4, 4).contiguous().realize()
     # TODO: scheduler limitation, should NOT raise AssertionError from numpy.
-    with self.assertRaisesRegex(RuntimeError, "contiguous"):
+    with nullcontext() if RANGEIFY else self.assertRaisesRegex(RuntimeError, "contiguous"):
       a = a.permute(1, 0)
       new_val = a + b
       a.assign(new_val)
@@ -319,7 +320,7 @@ class TestAssign(unittest.TestCase):
   def test_permuted_reduceop_child_dual_use(self):
     a = Tensor.randn(32, 32, 32).realize()
     b = Tensor.full((32, 32), 1.).contiguous().realize()
-    with self.assertRaisesRegex(RuntimeError, "contiguous"):
+    with nullcontext() if RANGEIFY else self.assertRaisesRegex(RuntimeError, "contiguous"):
       r = a.sum(axis=1)
       b.assign(r + b.permute(1, 0))
       b.realize()
@@ -364,10 +365,11 @@ class TestAssign(unittest.TestCase):
 
   def test_permuted_assignment_masked_view_not_contiguous(self):
     a = Tensor.ones(4, 4).contiguous().realize()
-    with self.assertRaisesRegex(RuntimeError, "contiguous"):
+    with nullcontext() if RANGEIFY else self.assertRaisesRegex(RuntimeError, "contiguous"):
       b = a.shrink((None, (0, 2))).pad((None, (0, 2)), value=2).permute(1, 0)
       a.assign(a + b)
       a.realize()
+      np.testing.assert_equal(a.numpy(), [[2,2,2,2], [2,2,2,2], [3,3,3,3], [3,3,3,3]])
 
   # TODO: is there a way to sneak in a permute such that it returns the wrong answer?
 
