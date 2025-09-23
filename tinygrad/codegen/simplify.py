@@ -43,7 +43,9 @@ pm_simplify_ranges = PatternMatcher([
 def reduce_rangeless(red:UOp):
   # TODO: share code with reduce_unparented
   if red.arg not in {Ops.ADD, Ops.MAX}: return None
-  if red.src[0].dtype != red.dtype: return None
+  if red.src[0].dtype != red.dtype:
+    raise
+    return None
   if any(x.op in {Ops.RANGE} for x in red.src[0].toposort()): return None
   ret = red.src[0]
   if red.arg is Ops.ADD:
