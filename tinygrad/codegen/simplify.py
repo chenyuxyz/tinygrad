@@ -44,13 +44,16 @@ def no_range(u:UOp) -> bool: return not any(x.op is Ops.RANGE for x in u.sparent
 
 def reduce_rangeless(red:UOp):
   # TODO: share code with reduce_unparented
-  if red.arg not in {Ops.ADD, Ops.MAX}: return None
+  if red.arg not in {Ops.ADD, Ops.MAX, Ops.MUL}: return None
   if red.src[0].dtype != red.dtype: return None
   if not no_range(red.src[0]): return None
   ret = red.src[0]
   if red.arg is Ops.ADD:
     for r in red.src[1:]:
       ret = ret * r.src[0].cast(ret.dtype.scalar()).broadcast(ret.dtype.count)
+  if red.arg is Ops.MUL:
+    for r in red.src[1:]:
+      ret = ret ** r.src[0].cast(ret.dtype.scalar()).broadcast(ret.dtype.count)
   return ret
 
 pm_reduce_collapse = PatternMatcher([
