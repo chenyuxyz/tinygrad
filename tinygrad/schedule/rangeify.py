@@ -6,6 +6,7 @@ from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, R
 from tinygrad.uop.symbolic import sym, symbolic_simple
 from tinygrad.helpers import argsort, prod, all_same, pluralize, getenv, RANGEIFY, Context, flatten, dedup
 from tinygrad.schedule.multi import multi_pm
+from tinygrad.codegen.simplify import pm_reduce_collapse
 
 from tinygrad.schedule.kernelize import Kernel
 from tinygrad.uop.ops import track_rewrites, graph_rewrite, identity_element, sint, AxisType
@@ -414,7 +415,8 @@ pm_cleanups = double_reshape+pm_mops+PatternMatcher([
 def bufferize_to_store(x:UOp):
   rngs = x.src[1:]
   shape = tuple([int(r.vmax+1) for r in rngs])
-  sym_shape = tuple([ssimplify(r.src[0]) for r in rngs])
+  # print(f"{rngs=}")
+  sym_shape = tuple([ssimplify(r.src[0]) if r.src else 1 for r in rngs])
   size = prod(shape)
   assert size > 0, f"no zero sized buffers {shape}"
 
@@ -577,7 +579,8 @@ def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
   # rangeify
   tsink = graph_rewrite(tsink, pm_rangeify, ctx=RangeifyContext(), bottom_up=True, name="rangeify")
   # NOTE: sym (vs symbolic_simple) breaks things here because ranges with len 1 aren't handled right
-  tsink = graph_rewrite(tsink, symbolic_simple, name="symbolic")  # this supports const folding
+  # tsink = graph_rewrite(tsink, symbolic_simple, name="symbolic")  # this supports const folding
+  tsink = graph_rewrite(tsink, symbolic_simple+pm_reduce_collapse, name="symbolic const folding")  # this supports const folding
   tsink = graph_rewrite(tsink, pm_cleanups, bottom_up=True, name="remove costly buffers")
 
   # rebuild the sink with all the BUFFERIZEs with tags, this is what's ending up in the tensor graph
