@@ -160,11 +160,10 @@ jobs:
       with:
         key: be-minimal
         deps: testing_minimal
-        python-version: '3.11'
     - name: Test dtype with Python emulator
-      run: DEBUG=1 PYTHON=1 python3 -m pytest -n=auto test/test_dtype.py test/test_dtype_alu.py
+      run: DEBUG=1 PYTHON=1 python3 -m pytest test/test_dtype.py test/test_dtype_alu.py
     - name: Test ops with Python emulator
-      run: DEBUG=2 SKIP_SLOW_TEST=1 PYTHON=1 python3 -m pytest -n=auto test/test_ops.py --durations=20
+      run: DEBUG=2 SKIP_SLOW_TEST=1 PYTHON=1 python3 -m pytest test/test_ops.py --durations=20
     - name: Test uops with Python emulator
       run: PYTHON=1 python3 -m pytest test/test_uops.py --durations=20
     - name: Test symbolic with Python emulator
