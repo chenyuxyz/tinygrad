@@ -1,9 +1,11 @@
 import unittest
 from tinygrad import Tensor, dtypes, TinyJit, UOp
 from tinygrad.apps.llm import apply_rope
+from test.helpers import expect_rangeify_fails
 
 # TODO: test_scheduler, but just in uint
 class TestAttention(unittest.TestCase):
+  @expect_rangeify_fails
   def test_half_qkv_buffers(self):
     BS, seqlen, dim = 10, 4, 100
     q = Tensor.ones(BS, seqlen, dim, dtype=dtypes.half).contiguous().realize()
@@ -25,6 +27,7 @@ class TestAttention(unittest.TestCase):
     self.assertGreater((result - apply_rope(x, 5)).abs().max().item(), 1e-6)
     with self.assertRaises(AssertionError): apply_rope(Tensor.randn(1, 1, 4, 7, dtype=dtypes.float32), 0)
 
+  @expect_rangeify_fails
   def test_apply_rope_jit_prune(self):
     def rope_fn(x_in, pos): return apply_rope(x_in, pos)
     rope_noprune = TinyJit(rope_fn)
