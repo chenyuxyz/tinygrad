@@ -527,8 +527,6 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   def unbind(self) -> tuple[Variable, int]:
     assert self.op is Ops.BIND and self.src[0].op is Ops.DEFINE_VAR and self.src[1].op is Ops.CONST, f"can't unbind {self}"
     return self.src[0], self.src[1].arg
-  @property
-  def val(self) -> int: return self.unbind()[1]
   def vars(self) -> set[UOp]:
     bound_vars = set([x for x in self.toposort() if x.op is Ops.BIND and x.src[0].op is Ops.DEFINE_VAR])
     bound_var_base = set(x.src[0] for x in bound_vars)
