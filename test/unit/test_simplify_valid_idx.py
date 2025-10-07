@@ -105,6 +105,8 @@ class TestValidIdxSimplification(unittest.TestCase):
     x = Variable("x", -100, 100)
     valid = ((x<0)&((100%x).cast(dtypes.bool)))
     self.assertIsNone(simplify_valid(valid))
+    valid = ((x<0)&((100%x).cast(dtypes.bool))&(x>0))
+    self.assertEqual(simplify_valid(valid).render(), "False")
 
   @unittest.expectedFailure  # TODO: fix
   def test_from_merge_views(self):
