@@ -384,14 +384,11 @@ symbolic = symbolic_simple+commutative+PatternMatcher([
   (UPat(Ops.AFTER, src=(UPat.var("s"),)), lambda s: s),
   # END is only on RANGES
   (UPat(Ops.END, name="e"), lambda e: UOp.end(*e.src[e.arg:], ends=sorted(UOp.sink(*e.src[:e.arg]).ranges, key=lambda x: x.arg))),
-])+gep_pushing
-
-symbolic_flat = symbolic+PatternMatcher([
   # ** combine terms (opinionated) **
   (-1 * (UPat.var("x") + UPat.var("y")), lambda x,y: (-x)+(-y)),  # -(x+y) -> -x + -y
   # (x+y)*c -> x*c+y*c. only for int, float has inf*0=nan issue
   ((UPat.var("x", dtypes.index) + UPat.var("y")) * UPat.cvar("c"), lambda x,y,c: x*c+y*c),
-])
+])+gep_pushing
 
 # ******** we take a small aside to "simplify_valid" to rewrite valids ********
 
@@ -509,7 +506,7 @@ pm_simplify_valid = PatternMatcher([
 # this is symbolic 2.0
 REMOVE_FROM_SINK = {Ops.SINK, Ops.UNROLL, Ops.PTRCAT, Ops.CAT, Ops.NOOP}
 REMOVE_FROM_BARRIER = {Ops.VECTORIZE, Ops.SINK, Ops.CAT, Ops.PTRCAT, Ops.NOOP}
-sym = symbolic_flat+pm_simplify_valid+PatternMatcher([
+sym = symbolic+pm_simplify_valid+PatternMatcher([
   # LOAD/STORE -> NOOP
   (UPat.var('x').store(UPat.var('x').load(), allow_any_len=True), lambda x: None if x.dtype.addrspace != AddrSpace.REG else x.src[0].src[0]),
   (UPat(Ops.LOAD, src=(UPat.cvar('c'))), lambda c: c),
