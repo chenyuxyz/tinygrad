@@ -754,12 +754,12 @@ python_alu: dict[Ops, Callable]  = {
   Ops.XOR: operator.xor, Ops.OR: operator.or_, Ops.AND: operator.and_, Ops.SHR: operator.rshift, Ops.SHL: operator.lshift, Ops.MAX: max,
   Ops.MOD: cmod, Ops.IDIV: cdiv, Ops.MULACC: lambda x,y,z: (x*y)+z, Ops.WHERE: lambda x,y,z: y if x else z, Ops.CMPEQ: operator.eq}
 
-def exec_alu(op:Ops, dtype:DType, operands, truncate_output=True):
+def exec_alu(op:Ops, dtype:DType, operands):
   if dtype.count > 1:
     return tuple([exec_alu(op, dtype.scalar(), [x[i] if isinstance(x, tuple) else x for x in operands]) for i in range(dtype.count)])
   if dtype==dtypes.index and op in GroupOp.Binary and Invalid in operands: return Invalid
   alu = python_alu[op](*operands)
-  return truncate.get(dtype, lambda x: x)(alu) if truncate_output else alu
+  return truncate.get(dtype, lambda x: x)(alu)
 
 # ***** uop helpers *****
 
