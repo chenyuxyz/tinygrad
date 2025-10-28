@@ -78,6 +78,7 @@ def optimize_local_size(_prg:Callable, global_size:list[int], rawbufs:list[Buffe
 
 class CompiledRunner(Runner):
   def __init__(self, p:ProgramSpec, precompiled:bytes|None=None, prg=None):
+    assert prg is None, prg
     if DEBUG >= 4: print(p.src)
     self.p:ProgramSpec = p
     if precompiled is not None: self.lib = precompiled
