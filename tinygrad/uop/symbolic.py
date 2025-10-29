@@ -380,13 +380,13 @@ symbolic = symbolic_simple+commutative+PatternMatcher([
   (UPat(Ops.AFTER, src=(UPat.var("s"),)), lambda s: s),
   # VECTORIZE/CONST
   (UPat(Ops.VECTORIZE, src=UPat(Ops.CONST), name="vec"), lambda vec: UOp.const(vec.dtype, tuple(x.arg for x in vec.src))),
-])+gep_pushing
-
-symbolic_flat = symbolic+PatternMatcher([
   # ** combine terms (opinionated) **
   (-1 * (UPat.var("x") + UPat.var("y")), lambda x,y: (-x)+(-y)),  # -(x+y) -> -x + -y
   # (x+y)*c -> x*c+y*c. only for int, float has inf*0=nan issue
   ((UPat.var("x", dtypes.index) + UPat.var("y")) * UPat.cvar("c"), lambda x,y,c: x*c+y*c),
+])+gep_pushing
+
+symbolic_flat = symbolic+PatternMatcher([
 ])
 
 # ******** we take a small aside to "simplify_valid" to rewrite valids ********
