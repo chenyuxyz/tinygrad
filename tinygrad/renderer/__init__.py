@@ -76,6 +76,7 @@ class ProgramSpec:
   _ran_post_init:bool=False  # NOTE: this is needed if you call replace on the Program
 
   def __post_init__(self):
+    assert self.uops is not None
     if not self._ran_post_init and self.uops is not None:
       # single pass through the uops
       for u in self.uops:
