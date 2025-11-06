@@ -1,3 +1,4 @@
+import math
 from typing import Self
 from tinygrad.uop import Ops
 from tinygrad.dtype import dtypes, ConstType
@@ -170,3 +171,4 @@ class MathMixin:
   def exp2(self): return self.alu(Ops.EXP2)
   def pow(self, x:Self|ConstType): return self.alu(Ops.POW, self.ufix(x))
   def __pow__(self, x:Self|ConstType): return self.pow(x)
+  def exp(self): return (self/math.log(2)).exp2()
