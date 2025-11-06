@@ -59,6 +59,76 @@ def slice_sum_kernel(dest:UOp, src:UOp):
   ast = dest[G].set(reg[0], end=G)
   return ast.sink(arg=KernelInfo(name=f"slice_sum_{src.shape[0]}_{src.shape[1]}", opts_to_apply=()))
 
+def flash_attention_forward(O:UOp, Q:UOp, K:UOp, V:UOp) -> UOp:
+  """
+  Simple Flash Attention Forward Pass - Element by Element
+
+  Q: [seq_len, head_dim]
+  K: [seq_len, head_dim]
+  V: [seq_len, head_dim]
+  O: [seq_len, head_dim]
+  """
+
+  N, d = Q.shape[0], Q.shape[1]  # seq_len, head_dim
+  scale = 1.0 / (d ** 0.5)
+
+  # Outer loop over query positions
+  i = UOp.range(N, 0)
+  # Loop over output dimensions
+  d_out = UOp.range(d, 1)
+
+  # Create registers for running max, sum, and output value
+  m_reg = UOp.placeholder((1,), Q.dtype.base, 0, addrspace=AddrSpace.REG)
+  l_reg = UOp.placeholder((1,), Q.dtype.base, 1, addrspace=AddrSpace.REG)
+  o_reg = UOp.placeholder((1,), Q.dtype.base, 2, addrspace=AddrSpace.REG)
+
+  # Initialize registers for this query position and output dimension
+  m_reg = m_reg.after(i, d_out)[0].set(-float('inf'))
+  l_reg = l_reg.after(i, d_out)[0].set(0.0)
+  o_reg = o_reg.after(i, d_out)[0].set(0.0)
+
+  # Inner loop over key positions (reduction)
+  j = UOp.range(N, 2, axis_type=AxisType.REDUCE)
+
+  # Compute dot product Q[i] * K[j] over head_dim
+  k_inner = UOp.range(d, 3, axis_type=AxisType.REDUCE)
+  qk_reg = UOp.placeholder((1,), Q.dtype.base, 3, addrspace=AddrSpace.REG)
+  qk_reg = qk_reg[0].set(0.0)
+  qk_reg = qk_reg[0].set(qk_reg.after(k_inner)[0] + Q[i, k_inner] * K[j, k_inner] * scale, end=k_inner)
+  qk_val = qk_reg[0]
+
+  # Update running max
+  m_old = m_reg.after(j)[0]
+  m_new = m_old.maximum(qk_val)
+
+  # Compute attention weight: exp(qk - m_new)
+  attn_weight = (qk_val - m_new).exp()
+
+  # Update running sum with correction factor
+  correction = (m_old - m_new).exp()
+  l_old = l_reg.after(j)[0]
+  l_new = l_old * correction + attn_weight
+
+  # Load V[j, d_out] and update output accumulator
+  v_val = V[j, d_out]
+  o_old = o_reg.after(j)[0]
+  o_new = o_old * correction + v_val * attn_weight
+
+  # Store updated values back to registers
+  m_reg = m_reg[0].set(m_new, end=j)
+  l_reg = l_reg[0].set(l_new, end=j)
+  o_reg = o_reg[0].set(o_new, end=j)
+
+  # Final normalization
+  l_final = l_reg.after(j)[0]
+  o_final = o_reg.after(j)[0] / l_final
+
+  # Store to output
+  store = O[i, d_out].store(o_final)
+
+  return store.end(d_out, i).sink(arg=KernelInfo(name=f"flash_attention_{N}_{d}", opts_to_apply=()))
+
+
 # **** backward callbacks ****
 
 def backward_gemm(gradient:UOp, kernel:UOp) -> tuple[UOp, UOp]:
@@ -170,6 +240,31 @@ class TestCustomKernel(unittest.TestCase):
 
     err = (grad_b - real_grad_b).square().max()
     self.assertLess(err.item(), 1e-6)
+
+def test_flash_attention():
+  """Test the flash attention kernel against standard attention"""
+
+  N, d = 32, 16  # seq_len, head_dim
+
+  # Create input tensors
+  Q = Tensor.randn(N, d).contiguous()
+  K = Tensor.randn(N, d).contiguous()
+  V = Tensor.randn(N, d).contiguous()
+  O = Tensor.empty(N, d)
+
+  # Run flash attention
+  O_flash = Tensor.custom_kernel(O, Q, K, V, fxn=lambda o,q,k,v: flash_attention_forward(o,q,k,v))[0]
+
+  # Reference implementation
+  scores = (Q @ K.T) / (d ** 0.5)
+  attn = scores.softmax(axis=-1)
+  O_ref = attn @ V
+
+  # Compare
+  Tensor.realize(O_flash, O_ref)
+  err = (O_flash - O_ref).square().max()
+  print(f"Max error: {err.item()}")
+  print(f"Test {'PASSED' if err.item() < 1e-4 else 'FAILED'}")
 
 if __name__ == '__main__':
   unittest.main()
