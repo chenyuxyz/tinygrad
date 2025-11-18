@@ -160,5 +160,5 @@ def upat_compile(self:UPat, fxn) -> Callable|None:
   globs = dyn_lookup.copy()
   globs["_fxn"] = real_fxn
   namespace: dict = {}
-  exec(code_str, globs, namespace)  # pylint: disable=W0122
+  exec(code_str, globs, namespace)
   return namespace["compiled_match"]

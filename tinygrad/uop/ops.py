@@ -355,9 +355,9 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
 
   # *** uop syntactic sugar ***
 
-  def sink(*srcs:UOp|None, **kwargs):  # pylint: disable=no-self-argument
+  def sink(*srcs:UOp|None, **kwargs):
     return UOp(Ops.SINK, dtypes.void, tuple([x for x in srcs if x is not None]), **kwargs)
-  def group(*srcs:UOp|None):  # pylint: disable=no-self-argument
+  def group(*srcs:UOp|None):
     if len(srcs) == 1 and isinstance(srcs[0], UOp): return srcs[0]
     return UOp(Ops.GROUP, dtypes.void, tuple([x for x in srcs if x is not None]))
   def vectorize(self, *srcs, **kwargs):
@@ -982,12 +982,12 @@ def upat_interpret(p:UPat, fxn:Callable) -> Callable:
   if 'ctx' in inspect.signature(real_fxn).parameters:
     def universal_match(uop, ctx):
       for match in p.match(uop, {}):
-        if (ret:=real_fxn(ctx=ctx, **match)) is not None: return ret  # pylint: disable=not-callable
+        if (ret:=real_fxn(ctx=ctx, **match)) is not None: return ret
       return None
   else:
     def universal_match(uop, _):
       for match in p.match(uop, {}):
-        if (ret:=real_fxn(**match)) is not None: return ret  # pylint: disable=not-callable
+        if (ret:=real_fxn(**match)) is not None: return ret
       return None
   return universal_match
 
@@ -1001,7 +1001,7 @@ class PatternMatcher:
     # uop is required, arg is optional
     for p,fxn in self.patterns:
       assert p.op is not None
-      if compiled and (match:=upat_compile(p, fxn)) is not None: pass # pylint: disable=E0606
+      if compiled and (match:=upat_compile(p, fxn)) is not None: pass
       else: match = upat_interpret(p, fxn)
       for uop in p.op: self.pdict.setdefault(uop, []).append((p, match, p.early_reject))
 

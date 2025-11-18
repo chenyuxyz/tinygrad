@@ -236,7 +236,7 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
     #  2. newly created for REDUCE_AXIS
     #  3. passed through for everything else
 
-    rngs = out_rngs  # rngs is the input ranges  # pylint: disable=possibly-used-before-assignment
+    rngs = out_rngs  # rngs is the input ranges
 
     # apply movement ops
     if x.op in GroupOp.Movement: rngs = apply_movement_op(x.op, x.src[0].shape, x.marg, rngs)
