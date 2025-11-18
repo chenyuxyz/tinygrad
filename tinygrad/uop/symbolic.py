@@ -479,10 +479,6 @@ def where_on_load(c1, buf, x):
   # aditionally we can drop the clause on the where if it already exists in the load
   remaining_clause = UOp.const(dtypes.bool, True).prod(*[c for c in c1.split_uop(Ops.AND) if c not in removed])
   return remaining_clause.where(buf.index(x.get_idx().valid(functools.reduce(operator.and_, moved_clauses, c2))), 0)
-pm_move_where_on_load = PatternMatcher([
-  (UPat.var("c1").where(UPat.var("buf").index(UPat.var("x")), 0), where_on_load),
-  (UPat.var("c1").where(0, UPat.var("buf").index(UPat.var("x"))), lambda c1,buf,x: where_on_load(c1.logical_not(),buf,x)),
-])
 
 pm_simplify_valid = PatternMatcher([
   # simplify valid
@@ -525,7 +521,6 @@ sym = symbolic+pm_simplify_valid+PatternMatcher([
   # fold gated LOAD/STORE
   (UPat((Ops.LOAD, Ops.STORE), src=(UPat().index(UPat.const(dtypes.index, Invalid)).or_casted(),), allow_any_len=True, name="x"),
     lambda x: UOp(Ops.NOOP) if x.op is Ops.STORE else x.const_like(0)), # invalid store does nothing. invalid load produces 0
-  # # Where after gated load becomes alt value, TODO: this is sort of duplicated with rules in devectorizer
   ((UPat.var("x") * UPat.var("x")).reciprocal(), lambda x: x.reciprocal()*x.reciprocal()),  # 1/(x^c) -> (1/x)^c
   ((UPat.var("x") * UPat.var("x") * UPat.var("x")).reciprocal(), lambda x: x.reciprocal()*x.reciprocal()*x.reciprocal()),
   ((UPat.var("x") * UPat.cvar("c")).reciprocal(), lambda x,c: x.reciprocal()*c.reciprocal()), # 1/(x*c) -> (1/c)*(1/x)
