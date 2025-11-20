@@ -259,7 +259,7 @@ def xlog2(d:UOp) -> UOp:
 
 def xpow(base:UOp, exponent:UOp) -> UOp:
   # start with b ** e = exp2(e * log2(b))
-  ret = (base < 0).where(-base, base).log2().mul(exponent).exp2()
+  ret = (exponent * (base < 0).where(-base, base).log2()).exp2()
   # negative base adjustment: nan for non-integer exponent and -1 for odd exponent
   non_int = exponent != exponent.cast(dtypes.int32).cast(exponent.dtype)
   adj = non_int.where(ret.const_like(math.nan),
