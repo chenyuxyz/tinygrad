@@ -137,19 +137,6 @@ def canonicalize_simplex(X:UOp) -> UOp|None:
     ret.append(u)
   return UOp.sum(*ret) if changed else None
 
-def gep_through_wmma(gep:UOp, wmma:UOp):
-  out_sz = prod(x[1] for x in wmma.arg[6][-1])
-  wmma_idxs = gep.arg[::out_sz]
-  for i in range(out_sz):
-    if tuple(x-i for x in gep.arg[i::out_sz]) != wmma_idxs: return None
-  tsrcs = []
-  for s,sz in zip(wmma.src, wmma.arg[6]):
-    src_args = []
-    ssz = prod(x[1] for x in sz)
-    for w in wmma_idxs: src_args += list(range((w//out_sz)*ssz, (w//out_sz)*ssz + ssz))
-    tsrcs.append(s.gep(tuple(src_args)))
-  return UOp(Ops.WMMA, gep.dtype, tuple(tsrcs), wmma.arg)
-
 gep_pushing = PatternMatcher([
   # GEP/VECTORIZE, GEP/GEP, GEP/CONST, GEP/VCONST
   (UPat(Ops.GEP, name='g2').f(Ops.GEP, name='g1'),
@@ -171,8 +158,6 @@ gep_pushing = PatternMatcher([
     if not isinstance(x.dtype, PtrDType) else None),
   # VECTORIZE on same GEP
   (UPat(Ops.VECTORIZE, name="v", src=UPat(Ops.GEP, src=(UPat.var("x"),))), lambda v,x: x.gep(tuple(get_single_element(i.arg) for i in v.src))),
-  # push some GEPs through WMMAs
-  (UPat(Ops.WMMA, name="wmma").f(Ops.GEP, name="gep"), gep_through_wmma),
 ])
 
 commutative = PatternMatcher([
