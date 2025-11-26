@@ -9,7 +9,7 @@ from tinygrad.helpers import panic
 
 # import all pattern matchers here
 from tinygrad.codegen.gpudims import pm_add_gpudims
-from tinygrad.uop.symbolic import sym, symbolic_simple, gep_pushing, symbolic, pm_move_where_on_load
+from tinygrad.uop.symbolic import sym, symbolic_simple, gep_pushing, pm_move_where_on_load
 from tinygrad.uop.decompositions import get_late_rewrite_patterns
 from tinygrad.codegen.late.expander import expander, pm_pre_expander, pm_group_for_reduce
 from tinygrad.codegen.late.devectorizer import load_store_folding, load_store_indexing, devectorize, pm_reduce, \
@@ -54,7 +54,7 @@ def full_rewrite_to_sink(sink:UOp, ren:Renderer|None=None, optimize:bool=True) -
     sink = apply_opts(sink, ren)
 
   # ** expander (expand_rewrite) **
-  sink = graph_rewrite(sink, sym+pm_move_where_on_load, name="postopt symbolic")
+  sink = graph_rewrite(sink, pm_move_where_on_load, name="postopt symbolic")
 
   # expand
   sink = graph_rewrite(sink, sym+pm_pre_expander+pm_group_for_reduce+expander, name="expander")
@@ -75,14 +75,14 @@ def full_rewrite_to_sink(sink:UOp, ren:Renderer|None=None, optimize:bool=True) -
   sink = graph_rewrite(sink, pm_add_loads, name="** add loads (code)")
 
   # devectorize (TODO: does this need opts?)
-  if DEVECTORIZE >= 2: pm_devectorize = sym+load_store_folding+load_store_indexing
-  elif DEVECTORIZE: pm_devectorize = sym+devectorize+load_store_folding+correct_load_store+load_store_indexing
-  else: pm_devectorize = sym+load_store_folding+correct_load_store+load_store_indexing
-  sink = graph_rewrite(sink, pm_devectorize, ctx=ren, name="devectorize")
+  if DEVECTORIZE >= 2: pm_devectorize = load_store_folding+load_store_indexing
+  elif DEVECTORIZE: pm_devectorize = devectorize+load_store_folding+correct_load_store+load_store_indexing
+  else: pm_devectorize = load_store_folding+correct_load_store+load_store_indexing
+  sink = graph_rewrite(sink, pm_devectorize+sym, ctx=ren, name="devectorize")
 
   # lower the index dtype to a concrete int
   sink = graph_rewrite(sink, pm_lower_index_dtype+load_store_indexing, ctx=ren.device, name="lower all index dtypes")
-  sink = graph_rewrite(sink, symbolic, name="post index symbolic")
+  sink = graph_rewrite(sink, sym, name="post index symbolic")
 
   # optional pre matcher
   if ren.pre_matcher is not None: sink = graph_rewrite(sink, ren.pre_matcher, name="pre_matcher")
