@@ -1,4 +1,4 @@
-import os, time, math, functools, random, contextlib
+import os, time, math, functools, random, contextlib, itertools
 from pathlib import Path
 import multiprocessing
 
@@ -980,8 +980,6 @@ def train_bert():
   # ** hyperparameters **
   BS                 = config["BS"]                     = getenv("BS", 11 * len(GPUS) if dtypes.default_float in (dtypes.float16, dtypes.bfloat16) else 8 * len(GPUS))
   grad_acc           = config["GRADIENT_ACC_STEPS"]     = getenv("GRADIENT_ACC_STEPS", 1)
-  # TODO: implement grad accumulation + mlperf logging
-  assert grad_acc == 1
   GBS                = config["GLOBAL_BATCH_SIZE"]      = BS * grad_acc
   EVAL_BS            = config["EVAL_BS"]                = getenv("EVAL_BS", 1 * len(GPUS))
   max_lr             = config["OPT_BASE_LEARNING_RATE"] = getenv("OPT_BASE_LEARNING_RATE", 0.000175 * math.sqrt(GBS/96))
@@ -1051,6 +1049,13 @@ def train_bert():
   scheduler_group = LRSchedulerGroup(scheduler_wd, scheduler_no_wd)
   print(f"training with global batch size {GBS} for one epoch with {train_steps} steps")
 
+  # ** gradient accumulation tensors **
+  pos_params = list(itertools.accumulate(optimizer_group.params, lambda x,y: x+y.numel(), initial=0))
+  bigloss = Tensor.zeros((), device=optimizer_group.params[0].device, dtype=dtypes.float32).contiguous()
+  biggrad = Tensor.zeros(pos_params[-1], device=optimizer_group.params[0].device, dtype=optimizer_group.params[0].dtype).contiguous()
+  global_norm = Tensor.zeros((), device=optimizer_group.params[0].device, dtype=dtypes.float32).contiguous()
+  Tensor.realize(bigloss, biggrad, global_norm)
+
   # log mlperf hparams
   if MLLOGGER:
     if RUNMLPERF:
@@ -1070,7 +1075,7 @@ def train_bert():
       MLLOGGER.event(key=mllog_constants.NUM_WARMUP_STEPS, value=config["NUM_WARMUP_STEPS"])
       MLLOGGER.event(key='start_warmup_step', value=0)
       MLLOGGER.event(key='opt_learning_rate_training_steps', value=config["TRAIN_STEPS"])
-      MLLOGGER.event(key=mllog_constants.GRADIENT_ACCUMULATION_STEPS, value=1)
+      MLLOGGER.event(key=mllog_constants.GRADIENT_ACCUMULATION_STEPS, value=grad_acc)
       MLLOGGER.event(key=mllog_constants.EVAL_SAMPLES, value=config["EVAL_BS"] * config["MAX_EVAL_STEPS"])
       MLLOGGER.event(key=mllog_constants.TRAIN_SAMPLES, value=config["GLOBAL_BATCH_SIZE"] * config["TRAIN_STEPS"])
 
@@ -1105,30 +1110,39 @@ def train_bert():
       MLLOGGER.start(key=mllog_constants.EPOCH_START, value=i*GBS, metadata={"epoch_num": i*GBS})
 
   @TinyJit
-  def train_step_bert(input_ids:Tensor, segment_ids:Tensor, attention_mask:Tensor,
-                      masked_positions:Tensor, masked_lm_ids:Tensor, masked_lm_weights:Tensor, next_sentence_labels:Tensor):
+  @Tensor.train()
+  def minibatch(input_ids:Tensor, segment_ids:Tensor, attention_mask:Tensor,
+                masked_positions:Tensor, masked_lm_ids:Tensor, masked_lm_weights:Tensor, next_sentence_labels:Tensor):
     for t in [input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels]:
       if len(GPUS) > 1: t.shard_(GPUS, axis=0)
       else: t.to_(GPUS[0])
     optimizer_group.zero_grad()
-
     lm_logits, seq_relationship_logits = model(input_ids, attention_mask, masked_positions, segment_ids)
-    loss = model.loss(lm_logits, seq_relationship_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels)
-    (loss * loss_scaler).backward()
+    uloss = model.loss(lm_logits, seq_relationship_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels) / grad_acc
+    (uloss * loss_scaler).backward()
+    ugrads = Tensor.cat(*[p.grad.contiguous().flatten() for p in optimizer_group.params], dim=0)
+    optimizer_group.zero_grad()
+    bigloss.assign(bigloss + uloss)
+    biggrad.assign(biggrad + ugrads)
+    Tensor.realize(bigloss, biggrad)
 
-    global_norm = Tensor(0.0, dtype=dtypes.float32, device=optimizer_group[0].device)
-    for p in optimizer_group.params:
-      p.grad = p.grad / loss_scaler
-      global_norm += p.grad.float().square().sum()
-    global_norm = global_norm.sqrt().contiguous()
-    for p in optimizer_group.params:
-      p.grad = (global_norm > 1.0).where((p.grad/global_norm).cast(p.grad.dtype), p.grad)
+  @TinyJit
+  def optimizer_step():
+    biggrad.assign(biggrad / loss_scaler)
+    global_norm.assign(biggrad.float().square().sum().sqrt())
+    biggrad.assign((global_norm > 1.0).where((biggrad / global_norm).cast(biggrad.dtype), biggrad))
+    Tensor.realize(biggrad, global_norm)
+
+    for j, p in enumerate(optimizer_group.params):
+      p.grad = biggrad[pos_params[j]:pos_params[j+1]].reshape(p.shape)
 
     optimizer_group.step()
     scheduler_group.step()
-    # TODO: no to("CPU") here because it blocks and messes the python time
-    Tensor.realize(loss, global_norm, optimizer_group.optimizers[0].lr)
-    return loss, global_norm, optimizer_group.optimizers[0].lr
+    optimizer_group.zero_grad()
+    bigloss.assign(Tensor.zeros_like(bigloss))
+    biggrad.assign(Tensor.zeros_like(biggrad))
+    Tensor.realize(bigloss, biggrad, global_norm, optimizer_group.optimizers[0].lr)
+    return global_norm, optimizer_group.optimizers[0].lr
 
   while train_data is not None and i < train_steps and not achieved:
     if getenv("TRAIN", 1):
@@ -1137,16 +1151,19 @@ def train_bert():
       st = time.perf_counter()
       GlobalCounters.reset()
       with WallTimeEvent(BenchEvent.STEP):
-        loss, global_norm, lr = train_step_bert(
-          train_data["input_ids"], train_data["segment_ids"], train_data["input_mask"], train_data["masked_lm_positions"], \
-          train_data["masked_lm_ids"], train_data["masked_lm_weights"], train_data["next_sentence_labels"])
+        for _ in range(grad_acc):
+          minibatch(
+            train_data["input_ids"], train_data["segment_ids"], train_data["input_mask"], train_data["masked_lm_positions"],
+            train_data["masked_lm_ids"], train_data["masked_lm_weights"], train_data["next_sentence_labels"])
+          train_data = next(train_it)
+        loss = bigloss.item()
+        ret_global_norm, lr = optimizer_step()
 
         pt = time.perf_counter()
         next_data = next(train_it)
         dt = time.perf_counter()
 
         device_str = parameters[0].device if isinstance(parameters[0].device, str) else f"{parameters[0].device[0]} * {len(parameters[0].device)}"
-        loss = loss.item()
         assert not math.isnan(loss)
         lr = lr.item()
 
@@ -1158,7 +1175,7 @@ def train_bert():
         f"{(cl - dt) * 1000.0:7.2f} ms {device_str}, {loss:5.2f} loss, {lr:.6f} LR, "
         f"{GlobalCounters.mem_used / 1e9:.2f} GB used, {GlobalCounters.global_ops * 1e-9 / (cl - st):9.2f} GFLOPS")
       if WANDB:
-        wandb.log({"lr": lr, "train/loss": loss, "train/global_norm": global_norm.item(), "train/step_time": cl - st,
+        wandb.log({"lr": lr, "train/loss": loss, "train/global_norm": ret_global_norm.item(), "train/step_time": cl - st,
                     "train/python_time": pt - st, "train/data_time": dt - pt, "train/cl_time": cl - dt,
                     "train/GFLOPS": GlobalCounters.global_ops * 1e-9 / (cl - st), "epoch": (i+1)*GBS})
 
@@ -1176,9 +1193,12 @@ def train_bert():
     if i % eval_step_freq == 0 or (BENCHMARK and i == BENCHMARK) or i == train_steps:
       if MLLOGGER and RUNMLPERF:
         MLLOGGER.start(key=mllog_constants.EVAL_START, value=None, metadata={"epoch_num": i*GBS, "step_num": i})
-      if getenv("RESET_STEP"): train_step_bert.reset()
-      elif getenv("FREE_INTERMEDIATE", 1) and train_step_bert.captured is not None:
-        train_step_bert.captured.free_intermediates()
+      if getenv("RESET_STEP"):
+        minibatch.reset()
+        optimizer_step.reset()
+      elif getenv("FREE_INTERMEDIATE", 1):
+        if minibatch.captured is not None: minibatch.captured.free_intermediates()
+        if optimizer_step.captured is not None: optimizer_step.captured.free_intermediates()
       eval_lm_losses = []
       eval_clsf_losses = []
       eval_lm_accs = []
