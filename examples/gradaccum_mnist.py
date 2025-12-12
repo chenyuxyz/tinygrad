@@ -1,6 +1,6 @@
 import itertools
 from typing import Callable
-from tinygrad import nn, Tensor, dtypes, Device, TinyJit
+from tinygrad import nn, Tensor, dtypes, Device, TinyJit, GlobalCounters
 from tinygrad.helpers import getenv, trange, partition
 
 class Model:
@@ -39,7 +39,9 @@ if __name__ == "__main__":
   for x in params:
     if x.requires_grad is None: x.requires_grad_()
     x.replace(x.contiguous())
-  Tensor.realize(*params)
+    x.grad = x.zeros_like().contiguous()
+  pgrads = [p.grad for p in params]
+  Tensor.realize(*params, *pgrads)
 
   # split params (with grads) and buffers (without)
   params, buffers = partition(params, lambda x: x.requires_grad)
@@ -54,7 +56,6 @@ if __name__ == "__main__":
   adam_params = [adam_m, adam_v, adam_b1_t, adam_b2_t]
 
   # create loss and grads. init all state so the JIT works on microbatch
-  for x in params: x.assign(x.detach())
   loss = Tensor.zeros(tuple()).contiguous()
   grads = Tensor.zeros(pos_params[-1]).contiguous()
   Tensor.realize(*params, *buffers, *adam_params, loss, grads)
@@ -63,19 +64,15 @@ if __name__ == "__main__":
   @Tensor.train()
   def microbatch():
     samples = Tensor.randint(BS // ACC_STEPS, high=X_train.shape[0])
-    for t in params: t.grad = None
     # divide by ACC_STEPS at the loss
     uloss = (model(X_train[samples]).sparse_categorical_crossentropy(Y_train[samples]) / ACC_STEPS).backward()
-    ugrads = Tensor.cat(*[t.grad.contiguous().flatten() for t in params], dim=0)
-    for t in params: t.grad = None
-    # concat the grads and assign them
     loss.assign(loss + uloss)
-    grads.assign(grads + ugrads)
-    Tensor.realize(*params, *buffers, loss, grads)
+    Tensor.realize(*params, *buffers, *pgrads, loss)
 
   @TinyJit
   def optimizer():
     # run optimizer (on CPU, where adam params live)
+    grads.assign(Tensor.cat(*[t.grad.contiguous().flatten() for t in params], dim=0))
     delta = functional_adam(grads.to("CPU"), adam_m, adam_v, adam_b1_t, adam_b2_t)
 
     # update the params, copying back the delta one at a time to avoid OOM
@@ -85,14 +82,15 @@ if __name__ == "__main__":
 
     # realize everything, zero out loss and grads
     loss.assign(Tensor.zeros_like(loss))
-    grads.assign(Tensor.zeros_like(grads))
-    Tensor.realize(*params, *adam_params, loss, grads)
+    for g in pgrads: g.assign(g.zeros_like().contiguous())
+    Tensor.realize(*params, *adam_params, *pgrads, loss)
 
   @TinyJit
   def get_test_acc() -> Tensor: return (model(X_test).argmax(axis=1) == Y_test).mean()*100
 
   test_acc = float('nan')
   for i in (t:=trange(getenv("STEPS", 70))):
+    GlobalCounters.reset()
     # microbatch sets the gradients
     for _ in range(ACC_STEPS): microbatch()
 
