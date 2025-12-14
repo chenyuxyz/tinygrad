@@ -498,13 +498,15 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
   def _axes(axes, noop_with_empty_axes): return axes or ([] if noop_with_empty_axes else None)
 
   # (padding_top, padding_left, ..., padding_bottom, padding_right, ...) -> (padding_left, padding_right, padding_top, padding_bottom, ...)
-  def _onnx_pads_to_tiny_pads(pads): return tuple(flatten(reversed(list(zip(pads, pads[len(pads)//2:])))))
+  def _onnx_pads_to_tiny_pads(pads):
+    n = len(pads) // 2
+    return tuple(x for i in range(n-1, -1, -1) for x in (pads[i], pads[i+n]))
 
   AUTO_PAD_OPTIONS = Literal["NOTSET", "SAME_UPPER", "SAME_LOWER", "VALID"]
   # (padding_height, padding_width) -> (padding_top, padding_left, padding_bottom, padding_right)
   def _auto_pad(pads, auto_pad: AUTO_PAD_OPTIONS):
-    if auto_pad == "SAME_UPPER": return [pads[i]//2 for i in range(len(pads))] + [pads[i]-pads[i]//2 for i in range(len(pads))]
-    return [pads[i]-pads[i]//2 for i in range(len(pads))] + [pads[i]//2 for i in range(len(pads))]
+    first = [p//2 for p in pads] if auto_pad == "SAME_UPPER" else [p - p//2 for p in pads]
+    return first + [p - f for p, f in zip(pads, first)]
 
   def _resolve_pool_pads(x:Tensor, p_, k_, d_, s_, auto_pad:AUTO_PAD_OPTIONS):
     if auto_pad == "VALID": return [0]*(len(k_)*2)
@@ -557,7 +559,7 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
   def If(condition:Tensor, else_branch:OnnxRunner, then_branch:OnnxRunner, intermediate_tensors:dict[str, Tensor]):
     def run_branch(branch:OnnxRunner):
       branch.graph_values.update(intermediate_tensors)
-      out = branch({k:intermediate_tensors[k] for k in branch.graph_inputs.keys()})
+      out = branch({k:intermediate_tensors[k] for k in branch.graph_inputs})
       # dereference intermediate tensors so Buffer can be deallocated
       for k in intermediate_tensors: del branch.graph_values[k]
       return out
@@ -647,7 +649,7 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
   def Mod(x:Tensor,y:Tensor,fmod=0): return x - x.div(y, rounding_mode="trunc") * y if fmod else x % y
 
   # ***** Casting Ops *****
-  # TODO: saturate
+  # TODO: saturate parameter is ignored in Cast and CastLike
   def Cast(x:Tensor, to:int, saturate:int=1): return x.cast(dtype_fallback(OnnxDataType(to).to_dtype(), "Cast op"))
   def CastLike(x:Tensor, target_type:Tensor, saturate:int=1): return x.cast(target_type.dtype)
 
@@ -698,15 +700,15 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
   def Tile(x:Tensor, repeats:list[int]): return x.repeat(repeats)
   def Concat(*xs:Tensor, axis:int): return Tensor.cat(*xs, dim=axis)
   def Slice(data:Tensor, starts:list[int], ends:list[int], axes:list[int]|None=None, steps:list[int]|None=None):
-    axes = axes or list(range(data.ndim))
-    steps = steps or [1]*data.ndim
-    slices = [slice(0,x,1) for x in data.shape]
+    axes, steps = axes or list(range(data.ndim)), steps or [1]*len(starts)
+    slices = [slice(None)] * data.ndim
     for i, axis in enumerate(axes): slices[axis] = slice(starts[i], ends[i], steps[i])
     return data[tuple(slices)]
 
   def Split(data:Tensor, split:list[int]|None=None, num_outputs:int=0, axis:int=0):
-    sz = data.shape[axis]
-    if split is None: split = [sz // num_outputs + (1 if i < sz % num_outputs else 0) for i in range(num_outputs)]
+    if split is None:
+      q, r = divmod(data.shape[axis], num_outputs)
+      split = [q + (1 if i < r else 0) for i in range(num_outputs)]
     return data.split(split, axis)
 
   def Pad(x:Tensor, pads:list[int], constant_value:ConstType|None=None, axes:list[int]|None=None,
@@ -787,6 +789,7 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
     k_ = _resolve_const(k)
     return x.triu(k_) if upper else x.tril(k_)
 
+  # TODO: roi and extrapolation_value are unused (needed for tf_crop_and_resize coordinate mode)
   def Resize(X:Tensor, roi:list[float]|None=None, scales:list[float]|None=None, sizes:list[int]|None=None, antialias:int=0,
         axes:list[int]|None=None, coordinate_transformation_mode:str='half_pixel', cubic_coeff_a:float=-0.75, exclude_outside:int=0,
         extrapolation_value:float=0.0, keep_aspect_ratio_policy:str='stretch', mode:str='nearest', nearest_mode:str='round_prefer_floor'):
@@ -934,23 +937,16 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
     # https://github.com/microsoft/onnxruntime/blob/main/docs/ContribOperators.md#com.microsoft.EmbedLayerNormalization
     assert (segment_ids is None) is (segment_embedding is None)
     assert mask is None and not mask_index_type, "functionality not supported yet"  # TODO
-    input_shape = input_ids.shape
-    seq_length = input_shape[1]
-    compute_seg_emb = (segment_embedding is not None and segment_ids is not None)
+    input_shape, seq_length = input_ids.shape, input_ids.shape[1]
     vocab_size, max_position_embeddings = word_embedding.shape[0], position_embedding.shape[0]
-    type_vocab_size  = (segment_embedding.shape[0] if compute_seg_emb else None)
 
     def embedding(x:Tensor, vocab_size, weight:Tensor) -> Tensor:
       return x.unsqueeze(-1).expand(*x.shape, vocab_size)._one_hot_along_dim(vocab_size) @ weight
 
     # bert embedding layer
     if position_ids is None: position_ids = Tensor.arange(seq_length, requires_grad=False).unsqueeze(0).expand(*input_shape)
-    wrd_embedding_res = embedding(input_ids, vocab_size, word_embedding)
-    pos_embedding_res = embedding(position_ids, max_position_embeddings, position_embedding)
-    seg_embedding_res = embedding(segment_ids, type_vocab_size, segment_embedding) if compute_seg_emb else None
-
-    embedding_sum = wrd_embedding_res + pos_embedding_res
-    if seg_embedding_res is not None: embedding_sum = embedding_sum + seg_embedding_res
+    embedding_sum = embedding(input_ids, vocab_size, word_embedding) + embedding(position_ids, max_position_embeddings, position_embedding)
+    if segment_embedding is not None: embedding_sum = embedding_sum + embedding(segment_ids, segment_embedding.shape[0], segment_embedding)
     out = embedding_sum.layernorm(eps=epsilon) * gamma + beta
     return out, None, embedding_sum
   def MeanVarianceNormalization(x:Tensor, axis:list[int]|None=None):
@@ -1004,7 +1000,7 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
     return (base_grid @ theta.transpose(1, 2)).reshape(N, *spatial_dims, -1)
 
   def attention_contrib(x:Tensor, weights:Tensor, bias:Tensor|None=None, mask_index:Tensor|None=None, past:Tensor|None=None,
-                        attention_bias:Tensor|None=None, past_sequence_length:Tensor|None=None,  do_rotary:int=0, mask_filter_value:float=-10000.0,
+                        attention_bias:Tensor|None=None, past_sequence_length:Tensor|None=None, do_rotary:int=0, mask_filter_value:float=-10000.0,
                         num_heads:int|None=None, past_present_share_buffer:int|None=None, qkv_hidden_sizes:list[int]|None=None,
                         rotary_embedding_dim:int|None=None, scale:float|None=None, unidirectional:int=0):
     assert not do_rotary and not attention_bias, "TODO"
@@ -1190,6 +1186,7 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
     return inp[tuple(con if i == axis else slice(None) for i in range(inp.ndim))]
 
   # ***** Quantization Ops *****
+  # TODO: saturate parameter is ignored (always saturates, never overflows)
   def QuantizeLinear(x:Tensor, y_scale:Tensor, y_zero_point:Tensor|int=0, axis:int=1, block_size:int=0, output_dtype:int=0, saturate=1):
     if isinstance(y_zero_point, Tensor): out_dtype = y_zero_point.dtype
     elif output_dtype != 0: out_dtype = dtype_fallback(OnnxDataType(output_dtype).to_dtype(), "QuantizeLinear op")
