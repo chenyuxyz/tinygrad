@@ -863,6 +863,73 @@ class TestJitRandom(unittest.TestCase):
       self.assertListEqual(t0, t1, msg=f"mismatch at list {i}")
 
 class TestJitGradAccumulation(unittest.TestCase):
+  def test_two_jit_functions_weight_update(self):
+    """Test: two separate JIT functions (minibatch + optimizer_step) - this reproduces the bug."""
+    Tensor.training = True
+    Tensor.manual_seed(42)
+
+    W = Tensor.randn(4, 4, requires_grad=True).realize()
+    W.grad = W.zeros_like().contiguous().realize()
+    x1 = Tensor.randn(2, 4).realize()
+    x2 = Tensor.randn(2, 4).realize()
+
+    # Non-JIT version
+    W_nojit = Tensor(W.numpy().copy(), requires_grad=True).realize()
+    W_nojit.grad = W_nojit.zeros_like().contiguous().realize()
+
+    def minibatch_nojit(x):
+      loss = (x @ W_nojit).sum()
+      loss.backward()
+      W_nojit.grad.realize()
+
+    def opt_step_nojit():
+      W_nojit.assign(W_nojit - 0.1 * W_nojit.grad).realize()
+      W_nojit.grad.assign(W_nojit.grad.zeros_like()).realize()
+
+    minibatch_nojit(x1)
+    g1_nojit = W_nojit.grad.numpy().copy()
+    opt_step_nojit()
+    minibatch_nojit(x2)
+    g2_nojit = W_nojit.grad.numpy().copy()
+
+    # JIT version with TWO separate JIT functions
+    W_jit = Tensor(W.numpy().copy(), requires_grad=True).realize()
+    W_jit.grad = W_jit.zeros_like().contiguous().realize()
+
+    @TinyJit
+    def minibatch_jit(x):
+      loss = (x @ W_jit).sum()
+      loss.backward()
+      W_jit.grad.realize()
+
+    @TinyJit
+    def opt_step_jit():
+      W_jit.assign(W_jit - 0.1 * W_jit.grad).realize()
+      W_jit.grad.assign(W_jit.grad.zeros_like()).realize()
+
+    # Warm up both JITs
+    minibatch_jit(x1)
+    W_jit.grad.assign(W_jit.grad.zeros_like()).realize()
+    minibatch_jit(x1)  # capture complete
+    opt_step_jit()     # warmup1
+    opt_step_jit()     # capture complete
+
+    # Reset for actual test
+    W_jit.assign(Tensor(W.numpy().copy())).realize()
+    W_jit.grad.assign(W_jit.grad.zeros_like()).realize()
+
+    minibatch_jit(x1)
+    g1_jit = W_jit.grad.numpy().copy()
+    opt_step_jit()
+    minibatch_jit(x2)
+    g2_jit = W_jit.grad.numpy().copy()
+
+    print(f"Round 1 grad: nojit={np.abs(g1_nojit).sum():.4f}, jit={np.abs(g1_jit).sum():.4f}")
+    print(f"Round 2 grad: nojit={np.abs(g2_nojit).sum():.4f}, jit={np.abs(g2_jit).sum():.4f}")
+
+    np.testing.assert_allclose(g1_nojit, g1_jit, atol=1e-5, rtol=1e-5, err_msg="Round 1 grad mismatch")
+    np.testing.assert_allclose(g2_nojit, g2_jit, atol=1e-5, rtol=1e-5, err_msg="Round 2 grad mismatch")
+
   def test_bert_minibatch_grad_accumulation(self):
     """Test that gradient accumulation works correctly with JIT for BERT-like model."""
     from extra.models.bert import BertForPretraining
@@ -930,9 +997,19 @@ class TestJitGradAccumulation(unittest.TestCase):
       np.testing.assert_allclose(g1, g2, atol=1e-4, rtol=1e-4, err_msg=f"Gradient mismatch at parameter {i}")
 
   def test_bert_optimizer_step(self):
-    """Test optimizer_step pattern from bert training with JIT."""
+    """Test optimizer_step pattern from bert training with JIT.
+
+    IMPORTANT: This test demonstrates a critical requirement for JIT with gradient accumulation:
+    All model parameters must be realized (have actual buffers) BEFORE JIT capture.
+
+    Root cause of the bug: When JIT captures unrealized weights (lazy tensors like glorot_uniform
+    or zeros), it captures the computation graph that generates them. After assign(), the tensor's
+    uop changes to point to a buffer, but JIT has captured the old computation graph.
+
+    Solution: Use load_state_dict with realized tensors to ensure all weights have actual buffers.
+    """
     from extra.models.bert import BertForPretraining
-    from tinygrad.nn.state import get_parameters
+    from tinygrad.nn.state import get_parameters, get_state_dict, load_state_dict
     from tinygrad.nn.optim import SGD
 
     Tensor.training = True
@@ -995,9 +1072,14 @@ class TestJitGradAccumulation(unittest.TestCase):
     zero_grads_nojit()
     weights2_nojit = [p.numpy().copy() for p in params]
 
-    # JIT version
+    # JIT version - CRITICAL: realize all params via load_state_dict before JIT capture
     Tensor.manual_seed(0)
     model_jit = BertForPretraining(**config)
+    # Force all parameters to have actual buffers (not lazy computation graphs)
+    state = get_state_dict(model_jit)
+    for k in state: state[k] = state[k].contiguous().realize()
+    load_state_dict(model_jit, state, consume=True)
+
     params_jit = get_parameters(model_jit)
     optimizer_jit = SGD(params_jit, lr=0.01)
     for p in params_jit:
