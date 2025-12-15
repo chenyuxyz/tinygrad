@@ -863,6 +863,41 @@ class TestJitRandom(unittest.TestCase):
       self.assertListEqual(t0, t1, msg=f"mismatch at list {i}")
 
 class TestJitGradAccumulation(unittest.TestCase):
+  def test_grad_accumulation_equals_average(self):
+    """Test that gradient accumulation produces gradients equal to average of individual batch gradients.
+    This is the fundamental definition of gradient accumulation - no JIT involved.
+    """
+    Tensor.training = True
+    Tensor.manual_seed(42)
+
+    W = Tensor.randn(4, 4, requires_grad=True).realize()
+    x1 = Tensor.randn(2, 4).realize()
+    x2 = Tensor.randn(2, 4).realize()
+    x3 = Tensor.randn(2, 4).realize()
+    grad_acc = 3
+
+    # Method 1: Compute individual gradients and average them
+    individual_grads = []
+    for x in [x1, x2, x3]:
+      W_copy = Tensor(W.numpy().copy(), requires_grad=True).realize()
+      loss = (x @ W_copy).sum()
+      loss.backward()
+      individual_grads.append(W_copy.grad.numpy().copy())
+    avg_grad = sum(individual_grads) / grad_acc
+
+    # Method 2: Gradient accumulation - accumulate grads then divide
+    W_acc = Tensor(W.numpy().copy(), requires_grad=True).realize()
+    W_acc.grad = W_acc.zeros_like().contiguous().realize()
+    for x in [x1, x2, x3]:
+      loss = (x @ W_acc).sum()
+      loss.backward()
+      W_acc.grad.realize()
+    accumulated_grad = W_acc.grad.numpy() / grad_acc
+
+    # Both methods should produce identical results
+    np.testing.assert_allclose(avg_grad, accumulated_grad, atol=1e-6, rtol=1e-6,
+      err_msg="Gradient accumulation should equal average of individual gradients")
+
   def test_two_jit_functions_weight_update(self):
     """Test: two separate JIT functions (minibatch + optimizer_step) - this reproduces the bug."""
     Tensor.training = True
