@@ -863,9 +863,126 @@ class TestJitRandom(unittest.TestCase):
       self.assertListEqual(t0, t1, msg=f"mismatch at list {i}")
 
 class TestJitGradAccumulation(unittest.TestCase):
+  def test_unrealized_weight_jit_issue(self):
+    """Test demonstrating the JIT issue with unrealized (lazy) weights.
+
+    Root cause: When JIT captures unrealized weights (lazy tensors like glorot_uniform),
+    it captures the computation graph that generates them. After assign(), the tensor's
+    uop changes to point to a buffer, but JIT has captured the old computation graph.
+
+    This test shows the issue and the fix (using contiguous().realize() before JIT).
+    """
+    Tensor.training = True
+    Tensor.manual_seed(42)
+
+    # Create a simple model with UNREALIZED weight (like glorot_uniform)
+    class SimpleModel:
+      def __init__(self):
+        self.weight = Tensor.glorot_uniform(4, 4)  # Unrealized!
+      def __call__(self, x): return x @ self.weight
+
+    model = SimpleModel()
+    x = Tensor.randn(2, 4).realize()
+
+    # Demonstrate the issue: JIT with unrealized weight doesn't track updates
+    @TinyJit
+    def forward_broken(x):
+      return model(x).sum()
+
+    loss1 = forward_broken(x).numpy()
+    forward_broken(x)  # capture
+    # Update weight
+    model.weight.assign(model.weight + 1.0).realize()
+    loss2 = forward_broken(x).numpy()
+
+    # BUG: loss doesn't change because JIT captured the glorot_uniform computation
+    assert np.allclose(loss1, loss2), "This demonstrates the bug - JIT doesn't see weight update"
+
+    # Now show the fix: realize weight before JIT
+    Tensor.manual_seed(42)
+    model_fixed = SimpleModel()
+    model_fixed.weight = model_fixed.weight.contiguous().realize()  # THE FIX
+
+    @TinyJit
+    def forward_fixed(x):
+      return model_fixed(x).sum()
+
+    loss1_fixed = forward_fixed(x).numpy()
+    forward_fixed(x)  # capture
+    # Update weight
+    model_fixed.weight.assign(model_fixed.weight + 1.0).realize()
+    loss2_fixed = forward_fixed(x).numpy()
+
+    # With the fix, loss changes correctly
+    assert not np.allclose(loss1_fixed, loss2_fixed), "With fix, JIT correctly sees weight update"
+
+  def test_tied_weight_jit_issue(self):
+    """Test demonstrating the JIT issue with tied (shared) weights.
+
+    In models like BERT, embedding weights are shared between encoder and decoder.
+    When these shared weights are unrealized, JIT captures the lazy computation graph
+    instead of buffer references, causing weight updates to not be visible to JIT.
+    """
+    Tensor.training = True
+    Tensor.manual_seed(42)
+
+    # Simple model with tied weights (like BERT's embedding <-> prediction head)
+    class TiedWeightModel:
+      def __init__(self):
+        self.embedding_weight = Tensor.glorot_uniform(8, 4)  # Shared weight
+        self.tied_weight = self.embedding_weight  # Tied reference
+      def encode(self, idx):
+        # Simplified embedding lookup
+        return self.embedding_weight[idx].sum(axis=1)
+      def decode(self, hidden):
+        # Use tied weight for decoding
+        return hidden @ self.tied_weight.T
+
+    model = TiedWeightModel()
+    idx = Tensor([0, 1, 2, 3]).realize()
+
+    # Verify weights are actually tied (same object)
+    assert model.embedding_weight is model.tied_weight, "Weights should be tied"
+
+    # Without fix: JIT doesn't see weight updates
+    @TinyJit
+    def forward_broken(idx):
+      hidden = model.encode(idx)
+      return model.decode(hidden).sum()
+
+    loss1 = forward_broken(idx).numpy()
+    forward_broken(idx)  # capture
+    model.embedding_weight.assign(model.embedding_weight + 1.0).realize()
+    loss2 = forward_broken(idx).numpy()
+
+    # BUG: loss doesn't change
+    bug_exists = np.allclose(loss1, loss2)
+
+    # With fix: realize tied weight before JIT
+    Tensor.manual_seed(42)
+    model_fixed = TiedWeightModel()
+    model_fixed.embedding_weight = model_fixed.embedding_weight.contiguous().realize()
+    model_fixed.tied_weight = model_fixed.embedding_weight  # Re-tie after realize
+
+    @TinyJit
+    def forward_fixed(idx):
+      hidden = model_fixed.encode(idx)
+      return model_fixed.decode(hidden).sum()
+
+    loss1_fixed = forward_fixed(idx).numpy()
+    forward_fixed(idx)  # capture
+    model_fixed.embedding_weight.assign(model_fixed.embedding_weight + 1.0).realize()
+    loss2_fixed = forward_fixed(idx).numpy()
+
+    # With fix, loss changes correctly
+    fix_works = not np.allclose(loss1_fixed, loss2_fixed)
+
+    assert bug_exists, "Test expects the bug to exist with unrealized tied weights"
+    assert fix_works, "Test expects the fix to work with realized tied weights"
+
   def test_grad_accumulation_equals_average(self):
-    """Test that gradient accumulation produces gradients equal to average of individual batch gradients.
-    This is the fundamental definition of gradient accumulation - no JIT involved.
+    """Test that JITted gradient accumulation equals non-JITted single batch gradient.
+    This verifies JIT correctly handles gradient accumulation across multiple minibatches.
     """
     Tensor.training = True
     Tensor.manual_seed(42)
@@ -876,27 +993,31 @@ class TestJitGradAccumulation(unittest.TestCase):
     x3 = Tensor.randn(2, 4).realize()
     grad_acc = 3
 
-    # Method 1: Compute individual gradients and average them
-    individual_grads = []
-    for x in [x1, x2, x3]:
-      W_copy = Tensor(W.numpy().copy(), requires_grad=True).realize()
-      loss = (x @ W_copy).sum()
-      loss.backward()
-      individual_grads.append(W_copy.grad.numpy().copy())
-    avg_grad = sum(individual_grads) / grad_acc
+    # Method 1: Non-JIT single batch with all data concatenated
+    W_single = Tensor(W.numpy().copy(), requires_grad=True).realize()
+    x_all = Tensor.cat(x1, x2, x3, dim=0)  # (6, 4)
+    loss_single = (x_all @ W_single).sum() / grad_acc  # Divide by grad_acc to match accumulated average
+    loss_single.backward()
+    single_batch_grad = W_single.grad.numpy().copy()
 
-    # Method 2: Gradient accumulation - accumulate grads then divide
-    W_acc = Tensor(W.numpy().copy(), requires_grad=True).realize()
-    W_acc.grad = W_acc.zeros_like().contiguous().realize()
-    for x in [x1, x2, x3]:
-      loss = (x @ W_acc).sum()
+    # Method 2: JIT gradient accumulation over 3 minibatches
+    W_jit = Tensor(W.numpy().copy(), requires_grad=True).realize()
+    W_jit.grad = W_jit.zeros_like().contiguous().realize()
+
+    @TinyJit
+    def minibatch_jit(x):
+      loss = (x @ W_jit).sum()
       loss.backward()
-      W_acc.grad.realize()
-    accumulated_grad = W_acc.grad.numpy() / grad_acc
+      W_jit.grad.realize()
+
+    # Run JIT minibatches (first 2 calls warmup+capture, 3rd is replay)
+    for x in [x1, x2, x3]:
+      minibatch_jit(x)
+    accumulated_grad = W_jit.grad.numpy() / grad_acc
 
     # Both methods should produce identical results
-    np.testing.assert_allclose(avg_grad, accumulated_grad, atol=1e-6, rtol=1e-6,
-      err_msg="Gradient accumulation should equal average of individual gradients")
+    np.testing.assert_allclose(single_batch_grad, accumulated_grad, atol=1e-6, rtol=1e-6,
+      err_msg="JIT gradient accumulation should equal non-JIT single batch gradient")
 
   def test_two_jit_functions_weight_update(self):
     """Test: two separate JIT functions (minibatch + optimizer_step) - this reproduces the bug."""
