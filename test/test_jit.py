@@ -863,6 +863,149 @@ class TestJitRandom(unittest.TestCase):
       self.assertListEqual(t0, t1, msg=f"mismatch at list {i}")
 
 class TestJitGradAccumulation(unittest.TestCase):
+  def test_same_jit_called_twice_captures_before_optimizer(self):
+    """Test demonstrating issue when same JIT function is called multiple times for grad accumulation.
+
+    With ONE JIT function called N times per round:
+    - Round 1: cnt=0 (warmup), cnt=1 (CAPTURE), cnt=2+ (replay) - capture happens BEFORE optimizer
+    - Capture happens with UNREALIZED weights (lazy glorot_uniform)
+    - JIT captures the lazy computation graph, not buffer references
+
+    With N SEPARATE JIT functions (one per minibatch):
+    - Round 1: all functions at cnt=0
+    - Round 2: all functions at cnt=1 (capture) - capture happens AFTER optimizer ran once
+    - Weights are now REALIZED from optimizer's assign()
+    - JIT captures buffer references correctly
+
+    This test shows that separate JIT functions work even without load_state_dict fix.
+    """
+    from extra.models.bert import BertForPretraining
+    from tinygrad.nn.state import get_parameters
+
+    Tensor.training = True
+    config = {'attention_probs_dropout_prob': 0.0, 'hidden_dropout_prob': 0.0, 'vocab_size': 8, 'type_vocab_size': 2,
+              'max_position_embeddings': 8, 'hidden_size': 4, 'intermediate_size': 16, 'num_attention_heads': 2, 'num_hidden_layers': 1}
+    BS, SEQ_LEN, MASKED_LM_POSITIONS, grad_acc = 2, 4, 2, 3
+    num_rounds = 4
+
+    # Generate different inputs for each minibatch
+    Tensor.manual_seed(42)
+    all_inputs = []
+    for _ in range(grad_acc * num_rounds):
+      all_inputs.append((
+        Tensor.randint(BS, SEQ_LEN, low=0, high=config['vocab_size']).realize(),
+        Tensor.randint(BS, SEQ_LEN, low=0, high=config['type_vocab_size']).realize(),
+        Tensor.ones(BS, SEQ_LEN).realize(),
+        Tensor.randint(BS, MASKED_LM_POSITIONS, low=0, high=SEQ_LEN).realize(),
+        Tensor.randint(BS, MASKED_LM_POSITIONS, low=0, high=config['vocab_size']).realize(),
+        Tensor.zeros(BS, MASKED_LM_POSITIONS).realize(),
+        Tensor.randint(BS, low=0, high=2).float().realize()
+      ))
+
+    # Non-JIT baseline
+    Tensor.manual_seed(0)
+    model_nojit = BertForPretraining(**config)
+    params_nojit = get_parameters(model_nojit)
+    for p in params_nojit:
+      p.requires_grad = True
+      p.grad = p.zeros_like().contiguous().realize()
+
+    def minibatch_nojit(inp):
+      lm_logits, seq_logits = model_nojit(inp[0], inp[2], inp[3], inp[1])
+      loss = model_nojit.loss(lm_logits, seq_logits, inp[4], inp[5], inp[6])
+      loss.backward()
+      Tensor.realize(*[p.grad for p in params_nojit])
+
+    def opt_step_nojit():
+      for p in params_nojit:
+        p.assign(p - 0.01 * p.grad / grad_acc).realize()
+        p.grad.assign(p.grad.zeros_like()).realize()
+
+    norms_nojit = []
+    for r in range(num_rounds):
+      for i in range(grad_acc):
+        minibatch_nojit(all_inputs[r * grad_acc + i])
+      norms_nojit.append(sum(np.abs(p.grad.numpy()).sum() for p in params_nojit))
+      opt_step_nojit()
+
+    # ONE JIT function (FAILS without load_state_dict fix)
+    Tensor.manual_seed(0)
+    model_one_jit = BertForPretraining(**config)
+    params_one_jit = get_parameters(model_one_jit)
+    for p in params_one_jit:
+      p.requires_grad = True
+      p.grad = p.zeros_like().contiguous().realize()
+
+    @TinyJit
+    def minibatch_one_jit(input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels):
+      lm_logits, seq_logits = model_one_jit(input_ids, attention_mask, masked_positions, segment_ids)
+      loss = model_one_jit.loss(lm_logits, seq_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels)
+      loss.backward()
+      Tensor.realize(*[p.grad for p in params_one_jit])
+
+    @TinyJit
+    def opt_step_one_jit():
+      for p in params_one_jit:
+        p.assign(p - 0.01 * p.grad / grad_acc).realize()
+        p.grad.assign(p.grad.zeros_like()).realize()
+
+    norms_one_jit = []
+    for r in range(num_rounds):
+      for i in range(grad_acc):
+        inp = all_inputs[r * grad_acc + i]
+        minibatch_one_jit(inp[0], inp[1], inp[2], inp[3], inp[4], inp[5], inp[6])
+      norms_one_jit.append(sum(np.abs(p.grad.numpy()).sum() for p in params_one_jit))
+      opt_step_one_jit()
+
+    # SEPARATE JIT functions (WORKS even without load_state_dict fix)
+    Tensor.manual_seed(0)
+    model_sep_jit = BertForPretraining(**config)
+    params_sep_jit = get_parameters(model_sep_jit)
+    for p in params_sep_jit:
+      p.requires_grad = True
+      p.grad = p.zeros_like().contiguous().realize()
+
+    def make_minibatch_jit():
+      @TinyJit
+      def minibatch_jit(input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels):
+        lm_logits, seq_logits = model_sep_jit(input_ids, attention_mask, masked_positions, segment_ids)
+        loss = model_sep_jit.loss(lm_logits, seq_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels)
+        loss.backward()
+        Tensor.realize(*[p.grad for p in params_sep_jit])
+      return minibatch_jit
+
+    minibatch_jits = [make_minibatch_jit() for _ in range(grad_acc)]
+
+    @TinyJit
+    def opt_step_sep_jit():
+      for p in params_sep_jit:
+        p.assign(p - 0.01 * p.grad / grad_acc).realize()
+        p.grad.assign(p.grad.zeros_like()).realize()
+
+    norms_sep_jit = []
+    for r in range(num_rounds):
+      for i in range(grad_acc):
+        inp = all_inputs[r * grad_acc + i]
+        minibatch_jits[i](inp[0], inp[1], inp[2], inp[3], inp[4], inp[5], inp[6])
+      norms_sep_jit.append(sum(np.abs(p.grad.numpy()).sum() for p in params_sep_jit))
+      opt_step_sep_jit()
+
+    # Verify: one JIT fails after round 1, separate JITs work
+    # Round 1: both should match (capture phase)
+    np.testing.assert_allclose(norms_nojit[0], norms_one_jit[0], rtol=1e-3)
+    np.testing.assert_allclose(norms_nojit[0], norms_sep_jit[0], rtol=1e-3)
+
+    # Round 2+: one JIT diverges, separate JITs still match
+    # Check that ONE JIT shows significant cumulative divergence (grows over rounds)
+    one_jit_divergences = [abs(norms_nojit[r] - norms_one_jit[r]) / norms_nojit[r] for r in range(1, num_rounds)]
+    assert max(one_jit_divergences) > 0.02, \
+      f"One JIT should show >2% divergence in later rounds but max was {max(one_jit_divergences)*100:.2f}%"
+
+    # Separate JITs should match closely in all rounds
+    for r in range(1, num_rounds):
+      np.testing.assert_allclose(norms_nojit[r], norms_sep_jit[r], rtol=1e-3,
+        err_msg=f"Round {r+1}: separate JITs should match")
+
   def test_unrealized_weight_jit_issue(self):
     """Test demonstrating the JIT issue with unrealized (lazy) weights.
 
