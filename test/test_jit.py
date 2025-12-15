@@ -1016,11 +1016,16 @@ class TestJitGradAccumulation(unittest.TestCase):
     config = {'attention_probs_dropout_prob': 0.0, 'hidden_dropout_prob': 0.0, 'vocab_size': 8, 'type_vocab_size': 2,
               'max_position_embeddings': 8, 'hidden_size': 4, 'intermediate_size': 16, 'num_attention_heads': 2, 'num_hidden_layers': 1}
     BS, SEQ_LEN, MASKED_LM_POSITIONS, grad_acc, loss_scaler = 2, 4, 2, 3, 2.0
+    # Use 4 rounds to ensure JIT replay kicks in (JIT: cnt=0 normal, cnt=1 capture, cnt>=2 replay)
+    # Round 1: minibatch warmup+capture, optimizer warmup
+    # Round 2: minibatch replay, optimizer capture
+    # Round 3+: both functions replaying
+    num_rounds = 4
 
-    # Generate inputs for 2 rounds of grad accumulation
+    # Generate inputs for num_rounds rounds of grad accumulation
     Tensor.manual_seed(42)
     inputs = []
-    for _ in range(grad_acc * 2):
+    for _ in range(grad_acc * num_rounds):
       inputs.append((Tensor.randint(BS, SEQ_LEN, low=0, high=config['vocab_size']).realize(),
                      Tensor.randint(BS, SEQ_LEN, low=0, high=config['type_vocab_size']).realize(),
                      Tensor.ones(BS, SEQ_LEN).realize(),
@@ -1060,17 +1065,13 @@ class TestJitGradAccumulation(unittest.TestCase):
       for p in params:
         p.grad.assign(p.grad.zeros_like().contiguous()).realize()
 
-    # Round 1
-    for i in range(grad_acc): minibatch_nojit(*inputs[i])
-    norm1_nojit = optimizer_step_nojit().numpy()
-    zero_grads_nojit()
-    weights1_nojit = [p.numpy().copy() for p in params]
-
-    # Round 2
-    for i in range(grad_acc): minibatch_nojit(*inputs[grad_acc + i])
-    norm2_nojit = optimizer_step_nojit().numpy()
-    zero_grads_nojit()
-    weights2_nojit = [p.numpy().copy() for p in params]
+    # Run all rounds for non-JIT
+    norms_nojit, weights_nojit = [], []
+    for r in range(num_rounds):
+      for i in range(grad_acc): minibatch_nojit(*inputs[r * grad_acc + i])
+      norms_nojit.append(optimizer_step_nojit().numpy())
+      zero_grads_nojit()
+      weights_nojit.append([p.numpy().copy() for p in params])
 
     # JIT version - CRITICAL: realize all params via load_state_dict before JIT capture
     Tensor.manual_seed(0)
@@ -1110,27 +1111,22 @@ class TestJitGradAccumulation(unittest.TestCase):
       for p in params_jit:
         p.grad.assign(p.grad.zeros_like().contiguous()).realize()
 
-    # Round 1
-    for i in range(grad_acc): minibatch_jit(*inputs[i])
-    norm1_jit = optimizer_step_jit().numpy()
-    zero_grads_jit()
-    weights1_jit = [p.numpy().copy() for p in params_jit]
+    # Run all rounds for JIT
+    norms_jit, weights_jit = [], []
+    for r in range(num_rounds):
+      for i in range(grad_acc): minibatch_jit(*inputs[r * grad_acc + i])
+      norms_jit.append(optimizer_step_jit().numpy())
+      zero_grads_jit()
+      weights_jit.append([p.numpy().copy() for p in params_jit])
 
-    # Round 2
-    for i in range(grad_acc): minibatch_jit(*inputs[grad_acc + i])
-    norm2_jit = optimizer_step_jit().numpy()
-    zero_grads_jit()
-    weights2_jit = [p.numpy().copy() for p in params_jit]
-
-    # Verify global norms match
-    np.testing.assert_allclose(norm1_nojit, norm1_jit, atol=1e-4, rtol=1e-4, err_msg="Round 1 global norm mismatch")
-    np.testing.assert_allclose(norm2_nojit, norm2_jit, atol=1e-4, rtol=1e-4, err_msg="Round 2 global norm mismatch")
+    # Verify global norms match for all rounds
+    for r in range(num_rounds):
+      np.testing.assert_allclose(norms_nojit[r], norms_jit[r], atol=1e-4, rtol=1e-4, err_msg=f"Round {r+1} global norm mismatch")
 
     # Verify weights match after each round
-    for i, (w1, w2) in enumerate(zip(weights1_nojit, weights1_jit)):
-      np.testing.assert_allclose(w1, w2, atol=1e-4, rtol=1e-4, err_msg=f"Round 1 weight mismatch at parameter {i}")
-    for i, (w1, w2) in enumerate(zip(weights2_nojit, weights2_jit)):
-      np.testing.assert_allclose(w1, w2, atol=1e-4, rtol=1e-4, err_msg=f"Round 2 weight mismatch at parameter {i}")
+    for r in range(num_rounds):
+      for i, (w1, w2) in enumerate(zip(weights_nojit[r], weights_jit[r])):
+        np.testing.assert_allclose(w1, w2, atol=1e-4, rtol=1e-4, err_msg=f"Round {r+1} weight mismatch at parameter {i}")
 
 if __name__ == '__main__':
   unittest.main()
