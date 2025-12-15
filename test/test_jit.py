@@ -889,11 +889,13 @@ class TestJitGradAccumulation(unittest.TestCase):
     def forward_broken(x):
       return model(x).sum()
 
-    loss1 = forward_broken(x).numpy()
-    forward_broken(x)  # capture
+    # JIT: cnt=0 normal, cnt=1 capture, cnt>=2 replay
+    forward_broken(x)  # cnt=0 warmup
+    forward_broken(x)  # cnt=1 capture
+    loss1 = forward_broken(x).numpy()  # cnt=2 first replay
     # Update weight
     model.weight.assign(model.weight + 1.0).realize()
-    loss2 = forward_broken(x).numpy()
+    loss2 = forward_broken(x).numpy()  # cnt=3 replay after weight update
 
     # BUG: loss doesn't change because JIT captured the glorot_uniform computation
     assert np.allclose(loss1, loss2), "This demonstrates the bug - JIT doesn't see weight update"
@@ -907,11 +909,12 @@ class TestJitGradAccumulation(unittest.TestCase):
     def forward_fixed(x):
       return model_fixed(x).sum()
 
-    loss1_fixed = forward_fixed(x).numpy()
-    forward_fixed(x)  # capture
+    forward_fixed(x)  # cnt=0 warmup
+    forward_fixed(x)  # cnt=1 capture
+    loss1_fixed = forward_fixed(x).numpy()  # cnt=2 first replay
     # Update weight
     model_fixed.weight.assign(model_fixed.weight + 1.0).realize()
-    loss2_fixed = forward_fixed(x).numpy()
+    loss2_fixed = forward_fixed(x).numpy()  # cnt=3 replay after weight update
 
     # With the fix, loss changes correctly
     assert not np.allclose(loss1_fixed, loss2_fixed), "With fix, JIT correctly sees weight update"
@@ -950,10 +953,12 @@ class TestJitGradAccumulation(unittest.TestCase):
       hidden = model.encode(idx)
       return model.decode(hidden).sum()
 
-    loss1 = forward_broken(idx).numpy()
-    forward_broken(idx)  # capture
+    # JIT: cnt=0 normal, cnt=1 capture, cnt>=2 replay
+    forward_broken(idx)  # cnt=0 warmup
+    forward_broken(idx)  # cnt=1 capture
+    loss1 = forward_broken(idx).numpy()  # cnt=2 first replay
     model.embedding_weight.assign(model.embedding_weight + 1.0).realize()
-    loss2 = forward_broken(idx).numpy()
+    loss2 = forward_broken(idx).numpy()  # cnt=3 replay after weight update
 
     # BUG: loss doesn't change
     bug_exists = np.allclose(loss1, loss2)
@@ -969,10 +974,11 @@ class TestJitGradAccumulation(unittest.TestCase):
       hidden = model_fixed.encode(idx)
       return model_fixed.decode(hidden).sum()
 
-    loss1_fixed = forward_fixed(idx).numpy()
-    forward_fixed(idx)  # capture
+    forward_fixed(idx)  # cnt=0 warmup
+    forward_fixed(idx)  # cnt=1 capture
+    loss1_fixed = forward_fixed(idx).numpy()  # cnt=2 first replay
     model_fixed.embedding_weight.assign(model_fixed.embedding_weight + 1.0).realize()
-    loss2_fixed = forward_fixed(idx).numpy()
+    loss2_fixed = forward_fixed(idx).numpy()  # cnt=3 replay after weight update
 
     # With fix, loss changes correctly
     fix_works = not np.allclose(loss1_fixed, loss2_fixed)
