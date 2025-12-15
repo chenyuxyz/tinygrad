@@ -862,5 +862,193 @@ class TestJitRandom(unittest.TestCase):
     for i, (t0, t1) in enumerate(zip(tst[0], tst[1])):
       self.assertListEqual(t0, t1, msg=f"mismatch at list {i}")
 
+class TestJitGradAccumulation(unittest.TestCase):
+  def test_bert_minibatch_grad_accumulation(self):
+    """Test that gradient accumulation works correctly with JIT for BERT-like model."""
+    from extra.models.bert import BertForPretraining
+    from tinygrad.nn.state import get_parameters
+
+    config = {'attention_probs_dropout_prob': 0.0, 'hidden_dropout_prob': 0.0, 'vocab_size': 8, 'type_vocab_size': 2,
+              'max_position_embeddings': 8, 'hidden_size': 4, 'intermediate_size': 16, 'num_attention_heads': 2, 'num_hidden_layers': 1}
+    BS, SEQ_LEN, MASKED_LM_POSITIONS = 2, 4, 2
+
+    # Generate 5 random inputs
+    Tensor.manual_seed(42)
+    inputs = []
+    for _ in range(5):
+      inputs.append((Tensor.randint(BS, SEQ_LEN, low=0, high=config['vocab_size']).realize(),
+                     Tensor.randint(BS, SEQ_LEN, low=0, high=config['type_vocab_size']).realize(),
+                     Tensor.ones(BS, SEQ_LEN).realize(),
+                     Tensor.randint(BS, MASKED_LM_POSITIONS, low=0, high=SEQ_LEN).realize(),
+                     Tensor.randint(BS, MASKED_LM_POSITIONS, low=0, high=config['vocab_size']).realize(),
+                     Tensor.zeros(BS, MASKED_LM_POSITIONS).realize(),
+                     Tensor.randint(BS, low=0, high=2).float().realize()))
+
+    # Non-JIT version
+    Tensor.manual_seed(0)
+    model = BertForPretraining(**config)
+    params = get_parameters(model)
+    for p in params:
+      p.requires_grad = True
+      p.grad = p.zeros_like().contiguous().realize()
+
+    def minibatch_nojit(input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels):
+      lm_logits, seq_relationship_logits = model(input_ids, attention_mask, masked_positions, segment_ids)
+      loss = model.loss(lm_logits, seq_relationship_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels)
+      loss.backward()
+      Tensor.realize(loss, *[p.grad for p in params])
+      return loss
+
+    losses_nojit = [minibatch_nojit(*inp).numpy() for inp in inputs]
+    grads_nojit = [p.grad.numpy().copy() for p in params]
+
+    # JIT version
+    Tensor.manual_seed(0)
+    model_jit = BertForPretraining(**config)
+    params_jit = get_parameters(model_jit)
+    for p in params_jit:
+      p.requires_grad = True
+      p.grad = p.zeros_like().contiguous().realize()
+
+    @TinyJit
+    def minibatch_jit(input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels):
+      lm_logits, seq_relationship_logits = model_jit(input_ids, attention_mask, masked_positions, segment_ids)
+      loss = model_jit.loss(lm_logits, seq_relationship_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels)
+      loss.backward()
+      Tensor.realize(loss, *[p.grad for p in params_jit])
+      return loss
+
+    losses_jit = [minibatch_jit(*inp).numpy() for inp in inputs]
+    grads_jit = [p.grad.numpy().copy() for p in params_jit]
+
+    # Verify losses match
+    for i, (l1, l2) in enumerate(zip(losses_nojit, losses_jit)):
+      np.testing.assert_allclose(l1, l2, atol=1e-4, rtol=1e-4, err_msg=f"Loss mismatch at minibatch {i}")
+
+    # Verify accumulated gradients match
+    for i, (g1, g2) in enumerate(zip(grads_nojit, grads_jit)):
+      np.testing.assert_allclose(g1, g2, atol=1e-4, rtol=1e-4, err_msg=f"Gradient mismatch at parameter {i}")
+
+  def test_bert_optimizer_step(self):
+    """Test optimizer_step pattern from bert training with JIT."""
+    from extra.models.bert import BertForPretraining
+    from tinygrad.nn.state import get_parameters
+    from tinygrad.nn.optim import SGD
+
+    Tensor.training = True
+    config = {'attention_probs_dropout_prob': 0.0, 'hidden_dropout_prob': 0.0, 'vocab_size': 8, 'type_vocab_size': 2,
+              'max_position_embeddings': 8, 'hidden_size': 4, 'intermediate_size': 16, 'num_attention_heads': 2, 'num_hidden_layers': 1}
+    BS, SEQ_LEN, MASKED_LM_POSITIONS, grad_acc, loss_scaler = 2, 4, 2, 3, 2.0
+
+    # Generate inputs for 2 rounds of grad accumulation
+    Tensor.manual_seed(42)
+    inputs = []
+    for _ in range(grad_acc * 2):
+      inputs.append((Tensor.randint(BS, SEQ_LEN, low=0, high=config['vocab_size']).realize(),
+                     Tensor.randint(BS, SEQ_LEN, low=0, high=config['type_vocab_size']).realize(),
+                     Tensor.ones(BS, SEQ_LEN).realize(),
+                     Tensor.randint(BS, MASKED_LM_POSITIONS, low=0, high=SEQ_LEN).realize(),
+                     Tensor.randint(BS, MASKED_LM_POSITIONS, low=0, high=config['vocab_size']).realize(),
+                     Tensor.zeros(BS, MASKED_LM_POSITIONS).realize(),
+                     Tensor.randint(BS, low=0, high=2).float().realize()))
+
+    # Non-JIT version
+    Tensor.manual_seed(0)
+    model = BertForPretraining(**config)
+    params = get_parameters(model)
+    optimizer = SGD(params, lr=0.01)
+    for p in params:
+      p.requires_grad = True
+      p.grad = p.zeros_like().contiguous().realize()
+
+    def minibatch_nojit(input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels):
+      lm_logits, seq_relationship_logits = model(input_ids, attention_mask, masked_positions, segment_ids)
+      loss = model.loss(lm_logits, seq_relationship_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels)
+      (loss * loss_scaler).backward()
+      Tensor.realize(loss, *[p.grad for p in params])
+      return loss
+
+    def optimizer_step_nojit():
+      global_norm = Tensor([0.0], dtype=dtypes.float32)
+      for p in params:
+        p.grad.assign(p.grad / loss_scaler / grad_acc).realize()
+        global_norm += p.grad.float().square().sum()
+      global_norm = global_norm.sqrt().contiguous().realize()
+      for p in params:
+        p.grad.assign((global_norm > 1.0).where((p.grad/global_norm).cast(p.grad.dtype), p.grad)).realize()
+      optimizer.step()
+      return global_norm
+
+    def zero_grads_nojit():
+      for p in params:
+        p.grad.assign(p.grad.zeros_like().contiguous()).realize()
+
+    # Round 1
+    for i in range(grad_acc): minibatch_nojit(*inputs[i])
+    norm1_nojit = optimizer_step_nojit().numpy()
+    zero_grads_nojit()
+    weights1_nojit = [p.numpy().copy() for p in params]
+
+    # Round 2
+    for i in range(grad_acc): minibatch_nojit(*inputs[grad_acc + i])
+    norm2_nojit = optimizer_step_nojit().numpy()
+    zero_grads_nojit()
+    weights2_nojit = [p.numpy().copy() for p in params]
+
+    # JIT version
+    Tensor.manual_seed(0)
+    model_jit = BertForPretraining(**config)
+    params_jit = get_parameters(model_jit)
+    optimizer_jit = SGD(params_jit, lr=0.01)
+    for p in params_jit:
+      p.requires_grad = True
+      p.grad = p.zeros_like().contiguous().realize()
+
+    @TinyJit
+    def minibatch_jit(input_ids, segment_ids, attention_mask, masked_positions, masked_lm_ids, masked_lm_weights, next_sentence_labels):
+      lm_logits, seq_relationship_logits = model_jit(input_ids, attention_mask, masked_positions, segment_ids)
+      loss = model_jit.loss(lm_logits, seq_relationship_logits, masked_lm_ids, masked_lm_weights, next_sentence_labels)
+      (loss * loss_scaler).backward()
+      Tensor.realize(loss, *[p.grad for p in params_jit])
+      return loss
+
+    @TinyJit
+    def optimizer_step_jit():
+      global_norm = Tensor([0.0], dtype=dtypes.float32)
+      for p in params_jit:
+        p.grad.assign(p.grad / loss_scaler / grad_acc).realize()
+        global_norm += p.grad.float().square().sum()
+      global_norm = global_norm.sqrt().contiguous().realize()
+      for p in params_jit:
+        p.grad.assign((global_norm > 1.0).where((p.grad/global_norm).cast(p.grad.dtype), p.grad)).realize()
+      optimizer_jit.step()
+      return global_norm
+
+    def zero_grads_jit():
+      for p in params_jit:
+        p.grad.assign(p.grad.zeros_like().contiguous()).realize()
+
+    # Round 1
+    for i in range(grad_acc): minibatch_jit(*inputs[i])
+    norm1_jit = optimizer_step_jit().numpy()
+    zero_grads_jit()
+    weights1_jit = [p.numpy().copy() for p in params_jit]
+
+    # Round 2
+    for i in range(grad_acc): minibatch_jit(*inputs[grad_acc + i])
+    norm2_jit = optimizer_step_jit().numpy()
+    zero_grads_jit()
+    weights2_jit = [p.numpy().copy() for p in params_jit]
+
+    # Verify global norms match
+    np.testing.assert_allclose(norm1_nojit, norm1_jit, atol=1e-4, rtol=1e-4, err_msg="Round 1 global norm mismatch")
+    np.testing.assert_allclose(norm2_nojit, norm2_jit, atol=1e-4, rtol=1e-4, err_msg="Round 2 global norm mismatch")
+
+    # Verify weights match after each round
+    for i, (w1, w2) in enumerate(zip(weights1_nojit, weights1_jit)):
+      np.testing.assert_allclose(w1, w2, atol=1e-4, rtol=1e-4, err_msg=f"Round 1 weight mismatch at parameter {i}")
+    for i, (w1, w2) in enumerate(zip(weights2_nojit, weights2_jit)):
+      np.testing.assert_allclose(w1, w2, atol=1e-4, rtol=1e-4, err_msg=f"Round 2 weight mismatch at parameter {i}")
+
 if __name__ == '__main__':
   unittest.main()
