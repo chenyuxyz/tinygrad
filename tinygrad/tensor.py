@@ -407,6 +407,14 @@ class Tensor(OpMixin):
     """
     return self.replace(self.shard(devices, axis))
 
+  def shard_like(self, y:Tensor) -> Tensor:
+    """
+    Shards the tensor the same way as `y` (same devices and axis).
+    """
+    if isinstance(y.device, str): return self.to(y.device)
+    if isinstance(self.device, tuple): return self.to(y.device) if self.device != y.device else self
+    return self.shard(y.device, y.uop.axis)
+
   CHUNK_SIZE = 2**20
   def fs_load(self, size:int) -> Tensor:
     """

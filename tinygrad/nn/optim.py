@@ -169,8 +169,8 @@ class LAMB(Optimizer):
       self.v[i].assign((self.b2 * self.v[i] + (1.0 - self.b2) * (g * g)).cast(self.v[i].dtype))
       m_hat = self.m[i] / (1.0 - self.b1_t)
       v_hat = self.v[i] / (1.0 - self.b2_t)
-      # move update back to param device before adding weight decay term
-      up = (m_hat / (v_hat.sqrt() + self.eps)).to(t.device) + self.wd * t.detach()
+      # move update back to param device (shard_like preserves sharding axis for multi-device params)
+      up = (m_hat / (v_hat.sqrt() + self.eps)).shard_like(t) + self.wd * t.detach()
       if not self.adam:
         r1 = t.detach().square().sum().sqrt()
         r2 = up.square().sum().sqrt()

@@ -63,6 +63,21 @@ class TestMultiTensor(unittest.TestCase):
     assert GlobalCounters.kernel_count == 0
     (X + X).realize()
 
+  def test_shard_like(self):
+    X = Tensor.ones(256).shard(devices_2, 0)
+    Y = Tensor.zeros(256).shard_like(X)
+    self.assertEqual(Y.device, X.device)
+    self.assertEqual(Y.uop.axis, 0)
+    # also test with axis=None
+    X2 = Tensor.ones(256).shard(devices_2, axis=None)
+    Y2 = Tensor.zeros(256).shard_like(X2)
+    self.assertEqual(Y2.device, X2.device)
+    self.assertEqual(Y2.uop.axis, None)
+    # test with single device
+    X3 = Tensor.ones(256)
+    Y3 = Tensor.zeros(256).shard_like(X3)
+    self.assertEqual(Y3.device, X3.device)
+
   def _test_shard_op(self, op, out, n=4):
     t = Tensor.ones(n).contiguous().realize().shard(devices_2, 0)
     r = op(t).realize()

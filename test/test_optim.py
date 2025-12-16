@@ -176,5 +176,15 @@ class TestOptim(unittest.TestCase):
     assert t.device == Device.DEFAULT
     assert opt.m[0].device == "CPU"
 
+  def test_lamb_multitensor(self):
+    # test that LAMB works with sharded model params
+    devices = (f"{Device.DEFAULT}:0", f"{Device.DEFAULT}:1")
+    t = Tensor(W_init.copy(), requires_grad=True).shard(devices, axis=0)
+    opt = LAMB([t], lr=0.001, fused=False)
+    t.sum().backward()
+    opt.step()
+    # verify param is still sharded
+    assert isinstance(t.device, tuple)
+
 if __name__ == '__main__':
   unittest.main()
