@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import unittest
 from tinygrad import Tensor, Device, dtypes
-from tinygrad.nn.optim import Adam, SGD, AdamW, Muon
+from tinygrad.nn.optim import Adam, SGD, AdamW, Muon, LAMB
 from tinygrad.helpers import CI
 from tinygrad.device import is_dtype_supported
 
@@ -162,6 +162,19 @@ class TestOptim(unittest.TestCase):
     Tensor.training = True
     optimizer.step()
     Tensor.training = old_state
+
+  def test_lamb_cpu_offload(self):
+    # test that LAMB works when optimizer params (m, v, b1_t, b2_t) are moved to CPU
+    t = Tensor(x_init.copy(), requires_grad=True, device=Device.DEFAULT)
+    opt = LAMB([t], lr=0.001, fused=False)
+    # move optimizer state to CPU
+    for p in opt.m + opt.v + [opt.b1_t, opt.b2_t]: p.replace(p.to("CPU"))
+    # run a step
+    t.sum().backward()
+    opt.step()
+    # verify param is still on DEFAULT and optimizer state on CPU
+    assert t.device == Device.DEFAULT
+    assert opt.m[0].device == "CPU"
 
 if __name__ == '__main__':
   unittest.main()
