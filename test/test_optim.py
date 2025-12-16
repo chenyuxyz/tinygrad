@@ -186,5 +186,20 @@ class TestOptim(unittest.TestCase):
     # verify param is still sharded
     assert isinstance(t.device, tuple)
 
+  def test_lamb_cpu_offload_multitensor(self):
+    # test that LAMB works with sharded model params and CPU offloaded optimizer state
+    devices = (f"{Device.DEFAULT}:0", f"{Device.DEFAULT}:1")
+    t = Tensor(W_init.copy(), requires_grad=True).shard(devices, axis=0)
+    ds = t.device
+    opt = LAMB([t], lr=0.001, fused=False)
+    # move optimizer state to CPU
+    for p in opt.m + opt.v + [opt.b1_t, opt.b2_t]: p.replace(p.to("CPU"))
+    # run a step
+    t.sum().backward()
+    opt.step()
+    # verify param is still sharded and optimizer state on CPU
+    assert t.device == ds
+    assert opt.m[0].device == "CPU"
+
 if __name__ == '__main__':
   unittest.main()

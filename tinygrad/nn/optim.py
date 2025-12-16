@@ -164,7 +164,7 @@ class LAMB(Optimizer):
     self.b2_t *= self.b2
     for i, (t, g) in enumerate(zip(params, grads)):
       # move gradient to optimizer device (supports CPU offloading of optimizer state)
-      g = g.to(self.m[i].device)
+      g = g.contiguous().to(self.m[i].device)
       self.m[i].assign((self.b1 * self.m[i] + (1.0 - self.b1) * g).cast(self.m[i].dtype))
       self.v[i].assign((self.b2 * self.v[i] + (1.0 - self.b2) * (g * g)).cast(self.v[i].dtype))
       m_hat = self.m[i] / (1.0 - self.b1_t)
