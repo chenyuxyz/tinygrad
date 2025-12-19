@@ -53,8 +53,8 @@ movement_ops = PatternMatcher([
   (UPat((Ops.VECTORIZE, Ops.VCONST), dtype=dtypes.index), lambda: True),
   (UPat({Ops.ADD, Ops.MUL, Ops.IDIV}, dtype=dtypes.index), lambda: True),
 
-  # AFTER on Movement Op
-  (UPat(Ops.AFTER, src=(UPat(GroupOp.Movement.union({Ops.MULTI})),), allow_any_len=True), lambda: True),
+  # AFTER on Movement Op or CONTIGUOUS
+  (UPat(Ops.AFTER, src=(UPat(GroupOp.Movement.union({Ops.MULTI, Ops.CONTIGUOUS})),), allow_any_len=True), lambda: True),
 
   # custom kernels allowed here
   (UPat(Ops.CUSTOM_KERNEL), lambda: True),
