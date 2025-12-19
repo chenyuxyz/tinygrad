@@ -116,6 +116,12 @@ class TestTensorGradient(unittest.TestCase):
     self.assertEqual(t.grad.device, t.device)
     self.assertListEqual(t.grad.tolist(), [2.0, 4.0, 6.0])
 
+  def test_shard_gradient(self):
+    devices = ("NULL:0", "NULL:1")
+    t = Tensor([1.0, 2, 3, 4], requires_grad=True).realize()
+    t.shard(devices, axis=0).square().sum().backward()
+    self.assertEqual(t.grad.device, t.device)
+
   def test_multiple_backward(self):
     x = Tensor([3.], requires_grad=True)
     (x*2)[0].backward()
