@@ -184,8 +184,13 @@ commutative = PatternMatcher([
 symbolic = symbolic_simple+commutative+PatternMatcher([
   # ** boolean algebra **
   (UPat.var("x") | (UPat.var("x") & UPat.var()), lambda x: x), # x|(x&y) -> x
-  # TODO: make a more general or folder like simplify_valid
   (UPat.var("x", dtype=dtypes.bool) | UPat.var("x").logical_not(), lambda x: x.const_like(True)),  # x|!x -> True
+  (UPat.var("x", dtype=dtypes.bool) & UPat.var("x").logical_not(), lambda x: x.const_like(False)),  # x&!x -> False
+  # De Morgan's laws: combine multiple negations into one
+  (UPat.var("a", dtype=dtypes.bool).logical_not() | UPat.var("b", dtype=dtypes.bool).logical_not(),
+   lambda a,b: (a & b).logical_not()),  # !a|!b -> !(a&b)
+  (UPat.var("a", dtype=dtypes.bool).logical_not() & UPat.var("b", dtype=dtypes.bool).logical_not(),
+   lambda a,b: (a | b).logical_not()),  # !a&!b -> !(a|b)
   # ** combine terms **
   (UPat.var("x") * UPat.cvar("c0") + UPat.var("x") * UPat.cvar("c1"), lambda x,c0,c1: x*(c0+c1)), # (x*c0)+(x*c1) -> x*(c0+c1)
   ((UPat.var("y") + UPat.var("x") * UPat.cvar("c0")) + UPat.var("x") * UPat.cvar("c1"), lambda x,y,c0,c1: y+x*(c0+c1)),

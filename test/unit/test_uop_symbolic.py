@@ -420,6 +420,47 @@ class TestSymbolic(unittest.TestCase):
     c = a<10
     self.helper_test_variable(c & c.logical_not(), False, False, "False")
 
+  def test_demorgan_or(self):
+    # De Morgan: !a | !b -> !(a & b)
+    a = Variable("a", 0, 10)
+    b = Variable("b", 0, 10)
+    c1 = a < 5
+    c2 = b < 5
+    self.helper_test_variable(c1.logical_not() | c2.logical_not(), False, True, "((a<5)&(b<5))!=True")
+
+  def test_demorgan_and(self):
+    # De Morgan: !a & !b -> !(a | b)
+    a = Variable("a", 0, 10)
+    b = Variable("b", 0, 10)
+    c1 = a < 5
+    c2 = b < 5
+    self.helper_test_variable(c1.logical_not() & c2.logical_not(), False, True, "((a<5)|(b<5))!=True")
+
+  def test_demorgan_or_same_var(self):
+    # De Morgan with same variable: !a | !a -> !a (should simplify via idempotent)
+    a = Variable("a", 0, 10)
+    c = a < 5
+    self.helper_test_variable(c.logical_not() | c.logical_not(), False, True, "(a<5)!=True")
+
+  def test_demorgan_and_same_var(self):
+    # De Morgan with same variable: !a & !a -> !a (should simplify via idempotent)
+    a = Variable("a", 0, 10)
+    c = a < 5
+    self.helper_test_variable(c.logical_not() & c.logical_not(), False, True, "(a<5)!=True")
+
+  def test_demorgan_chain(self):
+    # De Morgan applied to chain: !a | !b | !c -> !((a & b) & c)
+    a = Variable("a", 0, 10)
+    b = Variable("b", 0, 10)
+    c = Variable("c", 0, 10)
+    c1 = a < 5
+    c2 = b < 5
+    c3 = c < 5
+    expr = c1.logical_not() | c2.logical_not() | c3.logical_not()
+    simplified = graph_rewrite(expr, sym, name="simplify symbolic uop")
+    # verify it's semantically correct with z3
+    self.check_equal_z3(expr, simplified)
+
   def test_mod_factor_negative(self):
     self.helper_test_variable(usum([uconst(-29), Variable("a", 0, 10), Variable("b", 0, 10)*28]) % 28, -27, 27, "(((a+(b*28))+-29)%28)")
     self.helper_test_variable(usum([uconst(-29), Variable("a", 0, 100), Variable("b", 0, 10)*28]) % 28, -27, 27, "(((a+(b*28))+-29)%28)")
