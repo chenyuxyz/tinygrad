@@ -42,6 +42,15 @@ symbolic_simple = propagate_invalid + PatternMatcher([
   (UPat.var("x") + 0, lambda x: x),    # x+0 -> x
   (UPat.var("x") * 1, lambda x: x),    # x*1 -> x
   (UPat.var("x", dtype=dtypes.ints+(dtypes.bool, dtypes.index)) ^ 0, lambda x: x), # x^0 -> x
+  (UPat.var("x", dtype=dtypes.ints+(dtypes.bool, dtypes.index)) ^ UPat.var("x"), lambda x: x.const_like(0)), # x^x -> 0
+  # ** bitwise AND/OR with 0 for integers **
+  (UPat.var("x", dtype=dtypes.ints+(dtypes.index,)) & 0, lambda x: x.const_like(0)), # x&0 -> 0
+  (UPat.var("x", dtype=dtypes.ints+(dtypes.index,)) | 0, lambda x: x), # x|0 -> x
+  # ** shift by 0 and shift of 0 **
+  (UPat.var("x", dtype=dtypes.ints).alu(Ops.SHL, UPat.cvar(arg=0)), lambda x: x), # x<<0 -> x
+  (UPat.var("x", dtype=dtypes.ints).alu(Ops.SHR, UPat.cvar(arg=0)), lambda x: x), # x>>0 -> x
+  (UPat.cvar("x", arg=0, dtype=dtypes.ints).alu(Ops.SHL, UPat.var()), lambda x: x), # 0<<y -> 0
+  (UPat.cvar("x", arg=0, dtype=dtypes.ints).alu(Ops.SHR, UPat.var()), lambda x: x), # 0>>y -> 0
   (UPat.var("x") // UPat.var("x"), lambda x: x.const_like(1)), # x//x -> 1
   (UPat.var("x") // 1, lambda x: x),   # x//1 -> x
   (UPat.var("x") // -1, lambda x: -x), # x//-1 -> -x
@@ -70,6 +79,8 @@ symbolic_simple = propagate_invalid + PatternMatcher([
   (UPat.var("x") % UPat.var("x"), lambda x: x.const_like(0)), # x%x -> 0
   (UPat.var("x", dtype=dtypes.ints+(dtypes.bool, dtypes.index)) != UPat.var("x"),
    lambda x: x.const_like(False).cast(dtypes.bool.vec(x.dtype.count))), # x != x -> False (only ints)
+  (UPat.var("x", dtype=dtypes.ints+(dtypes.bool, dtypes.index)).eq(UPat.var("x")),
+   lambda x: x.const_like(True).cast(dtypes.bool.vec(x.dtype.count))), # x == x -> True (only ints)
   # ** constant folding **
   # TODO: add const folding for Ops.THREEFRY
   (UPat(GroupOp.Unary, src=(UPat((Ops.VCONST, Ops.CONST)),), name="a"), lambda a: a.const_like(exec_alu(a.op, a.dtype, [a.src[0].arg], False))),
