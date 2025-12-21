@@ -220,11 +220,10 @@ def least_upper_float(dt:DType) -> DType: return dt if dtypes.is_float(dt) else 
 DTYPES_DICT = {k: v for k, v in dtypes.__dict__.items() if isinstance(v, DType) and not k.startswith(("default", "void", "index"))}
 INVERSE_DTYPES_DICT = {**{v.name:k for k,v in DTYPES_DICT.items()}, "void": "void", "index":"index"}
 
-# which source dtypes can be safely cast to each target dtype (dt1 preserves value of dt0)
-# https://numpy.org/doc/stable/reference/generated/numpy.can_cast.html
+# which source dtypes can be losslessly cast to target dtype (based on mantissa bits for floats, itemsize for ints)
 _safe_cast_sources: dict[DType, tuple[DType, ...]] = {
   dtypes.index: dtypes.ints,
-  dtypes.double: (dtypes.float, dtypes.half, dtypes.bfloat16, *dtypes.fp8s, *dtypes.ints),
+  dtypes.double: (dtypes.float, dtypes.half, dtypes.bfloat16, *dtypes.fp8s, dtypes.uint32, dtypes.uint16, dtypes.uint8, dtypes.int32, dtypes.int16, dtypes.int8),
   dtypes.float: (dtypes.half, dtypes.bfloat16, *dtypes.fp8s, dtypes.uint16, dtypes.uint8, dtypes.int16, dtypes.int8),
   dtypes.half: (dtypes.uint8, dtypes.int8),
   dtypes.int64: (dtypes.uint32, dtypes.uint16, dtypes.uint8, dtypes.int32, dtypes.int16, dtypes.int8),

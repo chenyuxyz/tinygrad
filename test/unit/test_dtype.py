@@ -66,18 +66,23 @@ class TestDtypeTolist(unittest.TestCase):
     # 57344
     self.assertEqual(Tensor([-30000, 1.5, 3.1, 30000], device="PYTHON", dtype=dtypes.fp8e5m2).tolist(), [-28672.0, 1.5, 3.0, 28672.0])
 
-class TestCanSafeCastMatchesNumpy(unittest.TestCase):
-  def test_can_safe_cast_matches_numpy(self):
-    import numpy as np
-    # Map tinygrad dtypes to numpy dtypes (only those with direct equivalents)
-    dtype_map = {
-      dtypes.bool: np.bool_, dtypes.int8: np.int8, dtypes.int16: np.int16, dtypes.int32: np.int32, dtypes.int64: np.int64,
-      dtypes.uint8: np.uint8, dtypes.uint16: np.uint16, dtypes.uint32: np.uint32, dtypes.uint64: np.uint64,
-      dtypes.float16: np.float16, dtypes.float32: np.float32, dtypes.float64: np.float64,
-    }
-    for dt0, np0 in dtype_map.items():
-      for dt1, np1 in dtype_map.items():
-        self.assertEqual(can_safe_cast(dt0, dt1), np.can_cast(np0, np1, casting='safe'), f"{dt0} -> {dt1}")
+class TestCanSafeCast(unittest.TestCase):
+  def test_can_safe_cast(self):
+    # lossless casting based on type properties: mantissa bits for floats, itemsize for ints
+    floats = (dtypes.half, dtypes.float, dtypes.double)
+    def is_lossless(src, dst):
+      if src == dst or src == dtypes.bool: return True
+      if src in dtypes.ints and dst in dtypes.ints:  # int -> int
+        if src in dtypes.uints and dst in dtypes.uints: return dst.itemsize >= src.itemsize
+        if src in dtypes.sints and dst in dtypes.sints: return dst.itemsize >= src.itemsize
+        if src in dtypes.uints and dst in dtypes.sints: return dst.itemsize > src.itemsize
+        return False
+      if src in floats and dst in floats: return dst.itemsize >= src.itemsize  # float -> float
+      if src in dtypes.ints and dst in floats: return {dtypes.half: 11, dtypes.float: 24, dtypes.double: 53}[dst] >= src.itemsize * 8
+      return False
+    for src in [dtypes.bool, *dtypes.ints, *floats]:
+      for dst in [dtypes.bool, *dtypes.ints, *floats]:
+        self.assertEqual(can_safe_cast(src, dst), is_lossless(src, dst), f"{src} -> {dst}")
 
 if __name__ == "__main__":
   unittest.main()
