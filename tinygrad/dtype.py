@@ -199,11 +199,14 @@ def to_dtype(dtype:DTypeLike) -> DType: return dtype if isinstance(dtype, DType)
 
 # https://jax.readthedocs.io/en/latest/jep/9407-type-promotion.html
 # we don't support weak type and complex type
-promo_lattice = { dtypes.bool: [dtypes.int8, dtypes.uint8], dtypes.int8: [dtypes.int16], dtypes.int16: [dtypes.int32], dtypes.int32: [dtypes.int64],
-  dtypes.int64: [dtypes.fp8e4m3, dtypes.fp8e5m2], dtypes.uint8: [dtypes.int16, dtypes.uint16], dtypes.uint16: [dtypes.int32, dtypes.uint32],
+promo_lattice = {
+  dtypes.bool: [dtypes.int8, dtypes.uint8],
+  dtypes.int8: [dtypes.int16], dtypes.int16: [dtypes.int32], dtypes.int32: [dtypes.int64], dtypes.int64: [dtypes.fp8e4m3, dtypes.fp8e5m2],
+  dtypes.uint8: [dtypes.int16, dtypes.uint16], dtypes.uint16: [dtypes.int32, dtypes.uint32],
   dtypes.uint32: [dtypes.int64, dtypes.uint64], dtypes.uint64: [dtypes.fp8e4m3, dtypes.fp8e5m2],
-  dtypes.fp8e5m2: [dtypes.float16, dtypes.bfloat16], dtypes.fp8e4m3: [dtypes.float16, dtypes.bfloat16],
-  dtypes.float16: [dtypes.float32], dtypes.bfloat16: [dtypes.float32], dtypes.float32: [dtypes.float64], }
+  dtypes.fp8e4m3: [dtypes.float16, dtypes.bfloat16], dtypes.fp8e5m2: [dtypes.float16, dtypes.bfloat16],
+  dtypes.float16: [dtypes.float32], dtypes.bfloat16: [dtypes.float32], dtypes.float32: [dtypes.float64],
+}
 
 @functools.cache
 def _get_recursive_parents(dtype:DType) -> set[DType]:
@@ -217,22 +220,20 @@ def least_upper_float(dt:DType) -> DType: return dt if dtypes.is_float(dt) else 
 DTYPES_DICT = {k: v for k, v in dtypes.__dict__.items() if isinstance(v, DType) and not k.startswith(("default", "void", "index"))}
 INVERSE_DTYPES_DICT = {**{v.name:k for k,v in DTYPES_DICT.items()}, "void": "void", "index":"index"}
 
+# which source dtypes can be safely cast to each target dtype (dt1 preserves value of dt0)
+# https://numpy.org/doc/stable/reference/generated/numpy.can_cast.html
+_safe_cast_sources: dict[DType, tuple[DType, ...]] = {
+  dtypes.index: dtypes.ints,
+  dtypes.double: (dtypes.float, dtypes.half, dtypes.bfloat16, *dtypes.fp8s, dtypes.uint32, dtypes.uint16, dtypes.uint8, dtypes.int32, dtypes.int16, dtypes.int8),
+  dtypes.float: (dtypes.half, dtypes.bfloat16, *dtypes.fp8s, dtypes.uint16, dtypes.uint8, dtypes.int16, dtypes.int8),
+  dtypes.int64: (dtypes.uint32, dtypes.uint16, dtypes.uint8, dtypes.int32, dtypes.int16, dtypes.int8),
+  dtypes.int32: (dtypes.uint16, dtypes.uint8, dtypes.int16, dtypes.int8), dtypes.int16: (dtypes.uint8, dtypes.int8),
+  dtypes.uint64: (dtypes.uint32, dtypes.uint16, dtypes.uint8), dtypes.uint32: (dtypes.uint16, dtypes.uint8), dtypes.uint16: (dtypes.uint8,),
+}
 @functools.cache
 def can_safe_cast(dt0:DType, dt1:DType) -> bool:
-  # return if dt1 preserves value of dt0
-  # https://numpy.org/doc/stable/reference/generated/numpy.can_cast.html
   if dt0 == dt1 or dt0 == dtypes.bool: return True
-  match dt1:
-    case dtypes.index: return dt0 in dtypes.ints
-    case dtypes.double: return dt0 in (dtypes.float, dtypes.half, dtypes.bfloat16, *dtypes.fp8s,
-      dtypes.uint32, dtypes.uint16, dtypes.uint8, dtypes.int32, dtypes.int16, dtypes.int8)
-    case dtypes.float: return dt0 in (dtypes.half, dtypes.bfloat16, *dtypes.fp8s, dtypes.uint16, dtypes.uint8, dtypes.int16, dtypes.int8)
-    case dtypes.uint64: return dt0 in (dtypes.uint32, dtypes.uint16, dtypes.uint8)
-    case dtypes.uint32: return dt0 in (dtypes.uint16, dtypes.uint8)
-    case dtypes.int64: return dt0 in (dtypes.uint32, dtypes.uint16, dtypes.uint8, dtypes.int32, dtypes.int16, dtypes.int8)
-    case dtypes.int32: return dt0 in (dtypes.uint16, dtypes.uint8, dtypes.int16, dtypes.int8)
-    case dtypes.int16: return dt0 in (dtypes.uint8, dtypes.int8)
-    case _: return False
+  return dt0 in _safe_cast_sources.get(dt1, ())
 
 def sum_acc_dtype(dt:DType):
   # default acc dtype for sum
@@ -319,11 +320,8 @@ def fp8_to_float(x: int, dtype: DType) -> float:
 truncate: dict[DType, Callable] = {dtypes.bool: bool,
   dtypes.float16: float_to_fp16, dtypes.bfloat16: lambda x: float_to_bf16(float(x)),
   **{fp8: (lambda x, dtype=fp8: fp8_to_float(float_to_fp8(x, dtype), dtype)) for fp8 in dtypes.fp8s},
-  dtypes.float32: lambda x: ctypes.c_float(x).value, dtypes.float64: lambda x: ctypes.c_double(x).value,
-  dtypes.uint8: lambda x: ctypes.c_uint8(x).value, dtypes.uint16: lambda x: ctypes.c_uint16(x).value,
-  dtypes.uint32: lambda x: ctypes.c_uint32(x).value, dtypes.uint64: lambda x: ctypes.c_uint64(x).value,
-  dtypes.int8: lambda x: ctypes.c_int8(x).value, dtypes.int16: lambda x: ctypes.c_int16(x).value, dtypes.int32: lambda x: ctypes.c_int32(x).value,
-  dtypes.int64: lambda x: ctypes.c_int64(x).value}
+  **{getattr(dtypes, n): (lambda x, c=getattr(ctypes, f'c_{n}'): c(x).value)
+     for n in ('float', 'double', 'int8', 'int16', 'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64')}}
 
 # numpy and torch dtype interop
 
