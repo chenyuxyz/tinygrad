@@ -1,6 +1,6 @@
 import unittest
 from tinygrad.tensor import Tensor
-from tinygrad.dtype import dtypes, DType, ImageDType, PtrDType, to_dtype
+from tinygrad.dtype import dtypes, DType, ImageDType, PtrDType, to_dtype, can_safe_cast
 
 class TestImageDType(unittest.TestCase):
   def test_image_scalar(self):
@@ -65,6 +65,19 @@ class TestDtypeTolist(unittest.TestCase):
     self.assertEqual(Tensor([-30000, 1.5, 3.1, 30000], device="PYTHON", dtype=dtypes.fp8e4m3).tolist(), [-448.0, 1.5, 3.0, 448.0])
     # 57344
     self.assertEqual(Tensor([-30000, 1.5, 3.1, 30000], device="PYTHON", dtype=dtypes.fp8e5m2).tolist(), [-28672.0, 1.5, 3.0, 28672.0])
+
+class TestCanSafeCastMatchesNumpy(unittest.TestCase):
+  def test_can_safe_cast_matches_numpy(self):
+    import numpy as np
+    # Map tinygrad dtypes to numpy dtypes (only those with direct equivalents)
+    dtype_map = {
+      dtypes.bool: np.bool_, dtypes.int8: np.int8, dtypes.int16: np.int16, dtypes.int32: np.int32, dtypes.int64: np.int64,
+      dtypes.uint8: np.uint8, dtypes.uint16: np.uint16, dtypes.uint32: np.uint32, dtypes.uint64: np.uint64,
+      dtypes.float16: np.float16, dtypes.float32: np.float32, dtypes.float64: np.float64,
+    }
+    for dt0, np0 in dtype_map.items():
+      for dt1, np1 in dtype_map.items():
+        self.assertEqual(can_safe_cast(dt0, dt1), np.can_cast(np0, np1, casting='safe'), f"{dt0} -> {dt1}")
 
 if __name__ == "__main__":
   unittest.main()
