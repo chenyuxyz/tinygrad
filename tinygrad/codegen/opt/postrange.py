@@ -171,7 +171,7 @@ class Scheduler:
         check(all(x is not AxisType.THREAD for x in self.axis_types), "already threaded")
         check(rng in self._globalizable_rngs(), "can't apply range to this dim")
       if opt.op in {OptOps.GROUP, OptOps.GROUPTOP}:
-        check(all(x.op is not OptOps.TC for x in self.applied_opts), "no grouping with tensor cores")  # TODO: why is this wrong?
+        check(all(x.op is not OptOps.TC for x in self.applied_opts), "no grouping with tensor cores")
         check(not self.dont_use_locals, "can't use locals")
         check(rng.arg[-1] == AxisType.REDUCE, "group is for reduce")
       ret = self.shift_to(rng, amt, opt_to_at[opt.op], top=opt.op in {OptOps.GROUPTOP, OptOps.THREAD})
@@ -187,7 +187,7 @@ class Scheduler:
       check(ret is not None, "no tensor core available")
     elif opt.op is OptOps.PADTO:
       check(rng.src[0].op is Ops.CONST, "only pad const axes")
-      check(rng.arg[-1] not in {AxisType.UPCAST, AxisType.UNROLL}, "cannot pad upcasted") # TODO: why is this wrong?
+      check(rng.arg[-1] not in {AxisType.UPCAST, AxisType.UNROLL}, "cannot pad upcasted")
       check(rng.arg[-1] is not AxisType.THREAD, "cannot pad thread")
       # ok to pad SUM if all parent ALU ops have f(0) = 0
       if (r:=self.reduceop) is not None and rng.arg[-1] in (AxisType.GROUP_REDUCE, AxisType.REDUCE):
@@ -241,7 +241,6 @@ class Scheduler:
           if not len(in0_ranges) or not len(in1_ranges) or not len(red_ranges): continue
 
           # pick ranges
-          # NOTE: why are in1 and in0 switched?
           axis_choices = list(itertools.product(in1_ranges, in0_ranges, red_ranges))
           if not (axis < len(axis_choices)): continue
           axes = list(axis_choices[axis])

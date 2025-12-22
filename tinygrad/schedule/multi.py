@@ -90,7 +90,6 @@ def mstack_early_shrink(ms:UOp, shrink:UOp):
   for i, x in enumerate(ms.src):
     if x.op is Ops.COPY:
       # if src device doesn't have a renderer, we have to view after the copy
-      # TODO: a way to understand this
       if x.src[0].device in {"DISK", "NPY"}:
         ret.append(apply_shrink(x, i))
       else:

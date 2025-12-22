@@ -77,7 +77,6 @@ def create_bufferize_and_index_based_on_ranges(ctx:IndexingContext, x:UOp):
         new_src = UOp(Ops.BUFFERIZE, s.dtype, src=(new_src,)+closed_ranges, arg=opts, tag=s.tag if opts.addrspace == AddrSpace.GLOBAL else None)
         if x in ctx.range_map: new_src = new_src.index(*[r for i,r in enumerate(ctx.range_map[x][0]) if i in realized_ranges])
     new_srcs.append(new_src)
-  # NOTE: do we need this?
   return x.replace(src=tns) if x.src != (tns:=tuple(new_srcs)) else None
 
 def convert_pad_to_where_to_keep_behavior_local(ctx:IndexingContext, x:UOp):
@@ -175,7 +174,7 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
     # no ranges on kernels, they are internal
     if x.op is Ops.KERNEL: continue
 
-    if x.dtype.scalar() == dtypes.index: continue  # TODO: why do I need this?
+    if x.dtype.scalar() == dtypes.index: continue
     ending_ranges[x] = sum([ending_ranges.get(u, []) for u in consumer_map[x]], [])
 
     # *** the ranges on the output are
