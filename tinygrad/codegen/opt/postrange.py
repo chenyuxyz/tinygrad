@@ -151,7 +151,7 @@ class Scheduler:
         smem_sz = amt*upcast_local_sz*self.reduceop.dtype.itemsize
         check(smem_sz <= self.ren.shared_max, f"exceeds maximum shared memory size: needs {smem_sz}, max {self.ren.shared_max}")
       if self.reduceop is not None and (opt.op in {OptOps.GROUP, OptOps.GROUPTOP}):
-        # We currently dont support a group within another rudece, TODO: fix if-contexts
+        # we currently don't support a group within another reduce
         reduce = [u for u in self.ast.backward_slice if u.op is Ops.REDUCE and rng in merge_dicts([r.ranges for r in u.src[1:]])][0]
         check(not any(u.arg[-1] in (AxisType.REDUCE, AxisType.UNROLL, AxisType.GROUP_REDUCE) for u in reduce.ranges),
           "cannot have a GROUP_REDUCE inside another reduce")

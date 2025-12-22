@@ -275,11 +275,9 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
           if sorted(self.marg) != list(range(len(ps))): raise ValueError(f"invalid permutation {self.marg} of len {len(ps)}")
           return tuple(ps[i] for i in self.marg)
         case Ops.PAD:
-          # TODO: why do i need resolve here?
           if len(ps) != len(self.marg) or not all(resolve(b>=0) and resolve(e>=0) for b,e in self.marg): raise ValueError(f"invalid pad {self.marg}")
           return tuple(ssimplify(s+b+e) for s,(b,e) in zip(ps, self.marg))
         case Ops.SHRINK:
-          # TODO: why do i need resolve here?
           if len(ps) != len(self.marg) or not all(resolve(0<=b) and resolve(b<=e) and resolve(e<=s) for s,(b,e) in zip(ps, self.marg)):
             raise ValueError(f"invalid shrink {self.marg} for {ps}")
           return tuple(ssimplify(e-s) for s,e in self.marg)
