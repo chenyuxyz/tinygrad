@@ -71,7 +71,7 @@ def _get_winograd_matcols(mat, dims:int, shp:tuple[sint, ...], device:str|tuple[
 # winograd conv 3 kernel f(4x4,3x3) see: http://arxiv.org/abs/1509.09308
 def _apply_winograd_matrix(mat, t:Tensor, dims:int) -> Tensor:
   # multiply mat_1 @ mat_2 @ t with foldable constants, where mat_i acts on vector t along dimension i; roughly kron(mat, mat) @ t
-  # due to realize-before-expand rule in lazy.py, we must operate in this order: reshape -> expand -> arithmetic
+  # TODO: check comment (lazy.py no longer exists) due to realize-before-expand rule in lazy.py, we must operate in this order: reshape -> expand -> arithmetic
   t_ = t.reshape(t.shape[:dims] + (1,) * dims + t.shape[dims:]).expand(t.shape[:dims] + (len(mat),) * dims + t.shape[dims:])  # add output dims
   # precalculate mat columns for each dim; prod(itertools.product(matcols)) gives the columns of kron(mat, mat, ...)
   matcols = _get_winograd_matcols(mat, dims, t_.shape[dims:], t_.device, t_.dtype)
@@ -162,7 +162,7 @@ class Tensor(OpMixin):
 
     # data might be on a different device
     if isinstance(_device, str): self.uop:UOp = data if data.device == _device else data.copy_to_device(_device)
-    # if device is a tuple, we should have/construct a MultiLazyBuffer
+    # TODO: check comment (MultiLazyBuffer no longer exists) if device is a tuple, we should have/construct a MultiLazyBuffer
     elif isinstance(data.device, str): self.uop = Tensor(data).shard(_device).uop
     else:
       assert data.device == _device, f"MultiLazyBuffer device mismatch, {data.device} != {_device}"

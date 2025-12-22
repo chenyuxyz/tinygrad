@@ -530,7 +530,7 @@ add_tags = PatternMatcher([
 ])
 
 # support for using a contiguous permuted view instead of the parent view if one exists
-# modified from kernelize.py to not use ShapeTracker
+# TODO: check comment (kernelize.py no longer exists) modified from kernelize.py to not use ShapeTracker
 
 def found_contiguous(ctx:dict[UOp, UOp], contig:UOp, src:UOp):
   x = src

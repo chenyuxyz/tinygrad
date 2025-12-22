@@ -491,7 +491,7 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
       for s in self.src: yield from s.split_uop(sep)
     else: yield self
 
-  # *** from MultiLazyBuffer ***
+  # TODO: check comment (MultiLazyBuffer no longer exists) *** from MultiLazyBuffer ***
 
   def multi(self, axis:int|None):
     assert isinstance(self.device, tuple), f"multi device must be tuple, {self.device} isn't"
@@ -533,7 +533,7 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
     return self.shrink(tuple((0,s) if i != axis else (dnum*sz,dnum*sz+sz) for i,s in enumerate(self.shape)))
   def shard(self, devices:tuple[str, ...], axis:int) -> UOp: return self.copy_to_device(devices)._shard(axis).multi(axis)
 
-  # *** from LazyBuffer ***
+  # TODO: check comment (LazyBuffer no longer exists) *** from LazyBuffer ***
 
   def copy_to_device(self, device:str|tuple[str, ...]|UOp, arg=None):
     assert arg is None or isinstance(self.device, tuple)
