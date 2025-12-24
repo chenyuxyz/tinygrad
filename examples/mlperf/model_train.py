@@ -1471,17 +1471,11 @@ def train_llama3():
       if (ckpt_freq := getenv("CKPT")) and (i % ckpt_freq == 0 and (i != 1 or ckpt_freq == 1)):
         tqdm.write("saving checkpoint")
         if not os.path.exists(ckpt_dir := "./ckpts"): os.mkdir(ckpt_dir)
-        if WANDB and wandb.run is not None:
-          fn = f"{ckpt_dir}/llama3_{wandb.run.id}_{i}.safe"
-        else:
-          fn = f"{ckpt_dir}/llama3_{i}.safe"
+        fn = f"{ckpt_dir}/llama3_{i}.safe"
         safe_save(get_state_dict(model), fn)
 
         tqdm.write("saving optim checkpoint")
-        if WANDB and wandb.run is not None:
-          fn = f"{ckpt_dir}/llama3_{wandb.run.id}_{i}_optim.safe"
-        else:
-          fn = f"{ckpt_dir}/llama3_{i}_optim.safe"
+        fn = f"{ckpt_dir}/llama3_{i}_optim.safe"
         safe_save(get_state_dict(scheduler), fn)
 
     if sequences_seen % EVAL_FREQ == 0 and (i != 1 or EVAL_FREQ == 1):
@@ -1505,10 +1499,7 @@ def train_llama3():
         tqdm.write(f"target achieved after {sequences_seen} sequences")
         if getenv("CKPT"):
           if not os.path.exists(ckpt_dir := "./ckpts"): os.mkdir(ckpt_dir)
-          if WANDB and wandb.run is not None:
-            fn = f"{ckpt_dir}/llama3_{wandb.run.id}.safe"
-          else:
-            fn = f"{ckpt_dir}/llama3.safe"
+          fn = f"{ckpt_dir}/llama3.safe"
           safe_save(get_state_dict(model), fn)
         break
 
