@@ -355,7 +355,10 @@ def flatten_bufferize(x:UOp):
   if x.tag is None and len(x.src) == 2: return None
   ret = x.replace(tag=None, src=(x.src[0], get_single_element(apply_movement_op(Ops.RESHAPE, (prod(x.shape),), x.shape, x.src[1:]))))
   rngs = x.src[1:]
-  ret = ret.forced_reshape(x.shape)
+  ret = ret.reshape(x.shape)
+  # if shapes are the same, reshape returns self, so we need to wrap in a RESHAPE manually to hold the tag
+  if ret.op is not Ops.RESHAPE:
+    ret = ret._mop(Ops.RESHAPE, x.shape)
   if any(r.op is Ops.RANGE and r.src[0].op is not Ops.CONST for r in rngs):
     sym_shape = tuple([r.src[0] if r.op is not Ops.CONST else 1 for r in rngs])
     ret = ret.shrink(tuple([(0,x) for x in sym_shape]))
