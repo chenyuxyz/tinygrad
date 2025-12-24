@@ -763,41 +763,17 @@ class BlendedGPTDataset:
 
     return dataset_idx, dataset_sample_idx
 
-def batch_load_llama3(bs:int, samples:int, seqlen:int, base_dir:Path, seed:int=0, val:bool=True):
+def batch_load_llama3(bs:int, samples:int, seqlen:int, base_dir:Path, seed:int=0, val:bool=True, small:bool=False):
   if val:
-    dataset = BlendedGPTDataset([
-      base_dir / "validation" / "c4-validationn-91205-samples.en_text_document",
-    ], [
-      1.0
-    ], samples, seqlen, seed, False)
+    if small:
+      dataset = BlendedGPTDataset([base_dir / "c4-validation-91205-samples.en_text_document"], [1.0], samples, seqlen, seed, False)
+    else:
+      dataset = BlendedGPTDataset([base_dir / "validation" / "c4-validationn-91205-samples.en_text_document"], [1.0], samples, seqlen, seed, False)
   else:
-    dataset = BlendedGPTDataset([
-      base_dir / "c4-train.en_6_text_document",
-      base_dir / "c4-train.en_7_text_document",
-    ], [
-      1.0, 1.0
-    ], samples, seqlen, seed, True)
-
-  for b in range(math.ceil(samples / bs)):
-    batch = []
-    for i in range(bs):
-      tokens = dataset.get(b * bs + i)
-      batch.append(tokens)
-    yield Tensor.stack(batch, dim=0)
-
-def batch_load_llama3_small(bs:int, samples:int, seqlen:int, base_dir:Path, seed:int=0, val:bool=True):
-  if val:
-    dataset = BlendedGPTDataset([
-      base_dir / "c4-validation-91205-samples.en_text_document",
-    ], [
-      1.0
-    ], samples, seqlen, seed, False)
-  else:
-    dataset = BlendedGPTDataset([
-      base_dir / "c4-train.en_6_text_document",
-    ], [
-      1.0
-    ], samples, seqlen, seed, True)
+    if small:
+      dataset = BlendedGPTDataset([base_dir / "c4-train.en_6_text_document"], [1.0], samples, seqlen, seed, True)
+    else:
+      dataset = BlendedGPTDataset([base_dir / "c4-train.en_6_text_document", base_dir / "c4-train.en_7_text_document"], [1.0, 1.0], samples, seqlen, seed, True)
 
   for b in range(math.ceil(samples / bs)):
     batch = []

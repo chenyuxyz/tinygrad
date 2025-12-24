@@ -234,12 +234,8 @@ def eval_llama3():
     loss = logits.sparse_categorical_crossentropy(tokens[:, 1:])
     return loss.flatten().float()
 
-  if SMALL:
-    from examples.mlperf.dataloader import batch_load_llama3_small
-    iter = batch_load_llama3_small(BS, 5760, SEQLEN, BASEDIR, val=True)
-  else:
-    from examples.mlperf.dataloader import batch_load_llama3
-    iter = batch_load_llama3(BS, 5760, SEQLEN, BASEDIR, val=True)
+  from examples.mlperf.dataloader import batch_load_llama3
+  iter = batch_load_llama3(BS, 5760, SEQLEN, BASEDIR, val=True, small=bool(SMALL))
 
   losses = []
   for tokens in tqdm(iter, total=5760//BS):
