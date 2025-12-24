@@ -1314,6 +1314,13 @@ def train_llama3():
   opt_base_learning_rate = getenv("LR", 8e-5 * GBS / 1152)  # NOTE: cannot change for benchmark
   opt_end_learning_rate = getenv("END_LR", 8e-7)
 
+  # ** init wandb **
+  WANDB = getenv("WANDB")
+  if WANDB:
+    import wandb
+    wandb_args = {"id": wandb_id, "resume": "must"} if (wandb_id := getenv("WANDB_RESUME", "")) else {}
+    wandb.init(config=config, **wandb_args, project="MLPerf-LLaMA3")
+
   model_params = MODEL_PARAMS[getenv("LLAMA3_SIZE", "8B")]["args"]
   # vocab_size from the mixtral tokenizer
   if not SMALL: model_params |= {"vocab_size": 32000}
@@ -1457,14 +1464,24 @@ def train_llama3():
         with open(fname, "a") as f:
           f.write(f"{i} {loss:.4f} {lr.item():.12f} {GlobalCounters.mem_used / 1e9:.2f}\n")
 
+      if WANDB:
+        wandb.log({"lr": lr, "train/loss": loss, "train/step_time": sec,
+                   "train/GFLOPS": GlobalCounters.global_ops * 1e-9 / sec, "train/sequences_seen": sequences_seen})
+
       if (ckpt_freq := getenv("CKPT")) and (i % ckpt_freq == 0 and (i != 1 or ckpt_freq == 1)):
         tqdm.write("saving checkpoint")
         if not os.path.exists(ckpt_dir := "./ckpts"): os.mkdir(ckpt_dir)
-        fn = f"{ckpt_dir}/llama3_{i}.safe"
+        if WANDB and wandb.run is not None:
+          fn = f"{ckpt_dir}/llama3_{wandb.run.id}_{i}.safe"
+        else:
+          fn = f"{ckpt_dir}/llama3_{i}.safe"
         safe_save(get_state_dict(model), fn)
 
         tqdm.write("saving optim checkpoint")
-        fn = f"{ckpt_dir}/llama3_{i}_optim.safe"
+        if WANDB and wandb.run is not None:
+          fn = f"{ckpt_dir}/llama3_{wandb.run.id}_{i}_optim.safe"
+        else:
+          fn = f"{ckpt_dir}/llama3_{i}_optim.safe"
         safe_save(get_state_dict(scheduler), fn)
 
     if sequences_seen % EVAL_FREQ == 0 and (i != 1 or EVAL_FREQ == 1):
@@ -1481,11 +1498,17 @@ def train_llama3():
 
       tqdm.write(f"eval log perplexity: {log_perplexity:.4f}")
 
+      if WANDB:
+        wandb.log({"eval/log_perplexity": log_perplexity, "eval/sequences_seen": sequences_seen})
+
       if log_perplexity < EVAL_TARGET:
         tqdm.write(f"target achieved after {sequences_seen} sequences")
         if getenv("CKPT"):
           if not os.path.exists(ckpt_dir := "./ckpts"): os.mkdir(ckpt_dir)
-          fn = f"{ckpt_dir}/llama3.safe"
+          if WANDB and wandb.run is not None:
+            fn = f"{ckpt_dir}/llama3_{wandb.run.id}.safe"
+          else:
+            fn = f"{ckpt_dir}/llama3.safe"
           safe_save(get_state_dict(model), fn)
         break
 
