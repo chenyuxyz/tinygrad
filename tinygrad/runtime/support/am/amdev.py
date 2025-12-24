@@ -1,4 +1,3 @@
-from __future__ import annotations
 import ctypes, collections, dataclasses, functools, hashlib, array
 from tinygrad.helpers import mv_address, getenv, DEBUG, fetch
 from tinygrad.runtime.autogen.am import am

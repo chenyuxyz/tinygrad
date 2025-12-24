@@ -1,4 +1,3 @@
-from __future__ import annotations
 import os, ctypes, contextlib, re, functools, mmap, struct, array, sys, weakref
 assert sys.platform != 'win32'
 from typing import cast, ClassVar

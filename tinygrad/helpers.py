@@ -1,4 +1,3 @@
-from __future__ import annotations
 import os, functools, platform, time, re, contextlib, operator, hashlib, pickle, sqlite3, tempfile, pathlib, string, ctypes, sys, gzip, getpass, gc
 import urllib.request, subprocess, shutil, math, types, copyreg, inspect, importlib, decimal, itertools, socketserver, json
 from dataclasses import dataclass, field
@@ -164,7 +163,7 @@ class Context(contextlib.ContextDecorator):
     for k,v in self.old_context.items(): ContextVar._cache[k].value = v
 
 class ContextVar:
-  _cache: ClassVar[dict[str, ContextVar]] = {}
+  _cache: ClassVar[dict[str, "ContextVar"]] = {}
   value: int
   key: str
   def __init__(self, key, default_value):

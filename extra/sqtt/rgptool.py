@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 import argparse, ctypes, struct, hashlib, pickle, code, typing, functools
 import tinygrad.runtime.autogen.sqtt as sqtt
 from tinygrad.device import ProfileEvent, ProfileDeviceEvent, ProfileProgramEvent

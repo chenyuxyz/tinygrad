@@ -1,4 +1,3 @@
-from __future__ import annotations
 import ctypes, functools
 from tinygrad.helpers import DEBUG, getenv, mv_address, init_c_var, init_c_struct_t, suppress_finalizing, CUDA_CC, CUDA_PTX
 from tinygrad.device import Compiled, BufferSpec, LRUAllocator, CompilerPair, CompilerSet

@@ -1,4 +1,3 @@
-from __future__ import annotations
 import sys, argparse, typing, re, unicodedata, json, uuid, time, functools
 from tinygrad import Tensor, nn, UOp, TinyJit, getenv
 from tinygrad.helpers import partition, TCPServerWithReuse, HTTPRequestHandler, DEBUG, Timing, GlobalCounters, stderr_log, colored

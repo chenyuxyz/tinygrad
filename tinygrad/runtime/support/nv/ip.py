@@ -1,4 +1,3 @@
-from __future__ import annotations
 import ctypes, time, array, struct, itertools, dataclasses
 from typing import cast, Any
 from tinygrad.runtime.autogen import nv, nv_570 as nv_gpu, pci

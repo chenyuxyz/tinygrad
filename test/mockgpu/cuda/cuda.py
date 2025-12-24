@@ -1,4 +1,3 @@
-from __future__ import annotations
 from typing import Any
 import ctypes, time
 from tinygrad.runtime.autogen import cuda as orig_cuda

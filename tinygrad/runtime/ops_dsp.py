@@ -1,4 +1,3 @@
-from __future__ import annotations
 import ctypes, os, mmap, tempfile, pathlib, array, functools, threading, contextlib, sys, subprocess, struct
 assert sys.platform != 'win32'
 from tinygrad.device import BufferSpec, Compiled, Allocator, Compiler, CompilerSet, CompilerPair

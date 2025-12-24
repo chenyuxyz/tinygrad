@@ -1,4 +1,3 @@
-from __future__ import annotations
 import os, ctypes, functools, mmap, struct, array, math, sys, weakref, contextlib
 assert sys.platform != 'win32'
 from types import SimpleNamespace
