@@ -1427,12 +1427,17 @@ def train_llama3():
       from examples.mlperf.dataloader import batch_load_llama3
       return batch_load_llama3(BS, SAMPLES, SEQLEN, BASEDIR, seed=SEED, val=bool(TRAIN_ON_VAL), small=bool(SMALL))
 
+  if getenv("FAKEDATA", 0):
+    eval_dataset = None
+  else:
+    from examples.mlperf.dataloader import get_llama3_dataset
+    eval_dataset = get_llama3_dataset(5760, SEQLEN, BASEDIR, val=True, small=bool(SMALL))
+
   def get_eval_iter():
-    if getenv("FAKEDATA", 0):
+    if eval_dataset is None:
       return fake_data(EVAL_BS, 5760)
-    else:
-      from examples.mlperf.dataloader import batch_load_llama3
-      return batch_load_llama3(EVAL_BS, 5760, SEQLEN, BASEDIR, val=True, small=bool(SMALL))
+    from examples.mlperf.dataloader import iterate_llama3_dataset
+    return iterate_llama3_dataset(eval_dataset, EVAL_BS)
 
   iter = get_train_iter()
   i, sequences_seen = resume_ckpt, 0
