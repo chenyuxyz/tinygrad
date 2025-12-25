@@ -166,8 +166,8 @@ class Buffer:
   @suppress_finalizing
   def __del__(self): (not hasattr(self, '_buf')) or self.deallocate()
   def __repr__(self):
-    return f"<buf real:{self.is_allocated()} device:{self.device} size:{self.size} dtype:{self.dtype}" + \
-           (f" offset:{self.offset}" if self._base is not None else "") + (f" {self.options=}" if self.options is not None else "") + ">"
+    return f"<buf real:{self.is_allocated()} device:{self.device} size:{self.size} dtype:{self.dtype}" \
+           f"{f' offset:{self.offset}' if self._base else ''}{f' {self.options=}' if self.options else ''}>"
   def as_dmaref(self) -> DMARef:
     assert hasattr(self.allocator, "_as_dmaref"), f"Device {self.device} doesn't support DMA"
     return self.allocator._as_dmaref(self._buf)
