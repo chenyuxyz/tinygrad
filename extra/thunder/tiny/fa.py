@@ -11,6 +11,20 @@ NUM_WORKERS = 1
 Q_BLOCK_SIZE = 16
 KV_BLOCK_SIZE = 16
 
+def _empty_sharded(shape:tuple, device, dtype, axis:int|None) -> Tensor:
+  """Create an empty tensor, properly sharded if device is a tuple and axis is specified."""
+  if isinstance(device, tuple) and axis is not None:
+    num_devices = len(device)
+    per_shard_shape = tuple(s // num_devices if i == axis else s for i, s in enumerate(shape))
+    return Tensor(Tensor.empty(*per_shard_shape, device=device, dtype=dtype).uop.multi(axis), device=device)
+  return Tensor.empty(*shape, device=device, dtype=dtype)
+
+def _empty_sharded_like(t: Tensor) -> Tensor:
+  """Create an empty tensor with same shape/device/dtype as t, preserving sharding."""
+  if isinstance(t.device, tuple) and t.uop.axis is not None:
+    return _empty_sharded(t.shape, t.device, t.dtype, t.uop.axis)
+  return Tensor.empty_like(t)
+
 def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False):
   if len(xq.shape) == 3: xq, xk, xv = xq.unsqueeze(0), xk.unsqueeze(0), xv.unsqueeze(0)
 
@@ -321,16 +335,26 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
 
       return ker.finish(2)
 
+  # Get shard axis from input (if sharded)
+  shard_axis = xq.uop.axis if isinstance(xq.device, tuple) else None
+  # For mask creation, use first device if sharded, then shard afterward
+  mask_device = xq.device[0] if isinstance(xq.device, tuple) else xq.device
+
   if is_causal:
     if attn_mask is not None: raise RuntimeError("cannot set attn_mask when is_causal=True")
-    attn_mask = Tensor.ones((B, 1, N, N), requires_grad=False, device=xq.device, dtype=dtypes.bool).tril()
+    attn_mask = Tensor.ones((B, 1, N, N), requires_grad=False, device=mask_device, dtype=dtypes.bool).tril()
   if attn_mask is not None:
     if attn_mask.dtype == dtypes.bool: attn_mask = attn_mask.where(0, -float("inf"))
+    # Shard the mask if inputs are sharded and mask is not yet sharded
+    if shard_axis is not None and isinstance(attn_mask.device, str):
+      attn_mask = attn_mask.shard(xq.device, shard_axis)
   else:
-    attn_mask = Tensor.zeros((B, 1, N, N), requires_grad=False, device=xq.device, dtype=dtypes.float32)
+    attn_mask = Tensor.zeros((B, 1, N, N), requires_grad=False, device=mask_device, dtype=dtypes.float32)
+    if shard_axis is not None:
+      attn_mask = attn_mask.shard(xq.device, shard_axis)
 
-  attn = Tensor.empty_like(xq)
-  l_vec = Tensor.empty(B, H, 1, N, requires_grad=False, device=xq.device, dtype=dtypes.float32).detach()
+  attn = _empty_sharded_like(xq)
+  l_vec = _empty_sharded((B, H, 1, N), xq.device, dtypes.float32, shard_axis).detach()
 
   def grad(gradu:UOp, kernel:UOp) -> tuple[None, None, UOp, UOp, UOp, None]:
     grad = Tensor(gradu)
