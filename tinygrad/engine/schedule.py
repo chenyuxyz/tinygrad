@@ -35,7 +35,18 @@ def create_schedule(sched_sink:UOp) -> tuple[list[ExecItem], UOp]:
         elif s.op in {Ops.BUFFER, Ops.BIND}:
           pass  # a BUFFER is already realized, BINDs are handled in complete_create_schedule_with_vars
         else:
-          raise RuntimeError(f"input to kernel must be AFTER or BUFFER, not {s.op}")
+          # For other ops (NOOP, INDEX, CAST, etc.), check if buf_uop leads to AFTER
+          buf = s.buf_uop
+          if buf.op is Ops.AFTER:
+            children.setdefault(buf.src[1], []).append(k)
+            in_degree[k] += 1
+          elif buf.op is Ops.MSTACK:
+            for ss in buf.src:
+              if ss.op is Ops.MSELECT: ss = ss.src[0]
+              if ss.op is Ops.AFTER:
+                children.setdefault(ss.src[1], []).append(k)
+                in_degree[k] += 1
+          # buf.op is BUFFER means already realized, no dependency needed
 
   with cpu_profile(TracingKey("linearize schedule")):
     queue: deque[UOp] = deque()

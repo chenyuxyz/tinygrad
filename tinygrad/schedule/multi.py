@@ -112,6 +112,8 @@ replace_allreduce = PatternMatcher([
     x.mselect(0).copy_to_device(c.device) if isinstance(c.device, str) and isinstance(x.device, tuple) else None),
   # MSELECT on MSTACK is replaced with nothing
   (UPat(Ops.MSELECT, src=(UPat(Ops.MSTACK, name="mstack"),), name="ms"), lambda mstack, ms: mstack.src[ms.arg]),
+  # MSELECT on MULTI(MSTACK) - directly select from the MSTACK
+  (UPat(Ops.MSELECT, src=(UPat(Ops.MULTI, src=(UPat(Ops.MSTACK, name="mstack"),)),), name="ms"), lambda mstack, ms: mstack.src[ms.arg]),
   # move shrink before MSTACK
   (UPat(Ops.SHRINK, src=(UPat(Ops.MSTACK, name="ms"),), allow_any_len=True, name="shrink"), mstack_early_shrink),
   # move MSELECT before movement ops
@@ -202,6 +204,60 @@ def assign_multi(dest:UOp, src:UOp):
 def passthrough_multi(root:UOp, multi:UOp):
   return UOp(root.op, root.dtype, (multi.src[0],), root.arg).multi(multi.axis)
 
+# MSTACK handlers - push operations inside MSTACK
+def passthrough_mstack(root:UOp, mstack:UOp):
+  """Push passthrough ops (CAST, BITCAST, CONTIGUOUS, etc) inside MSTACK."""
+  return UOp(Ops.MSTACK, root.dtype, tuple(UOp(root.op, root.dtype, (s,), root.arg) for s in mstack.src))
+
+def permute_mstack(root:UOp, mstack:UOp):
+  """Push PERMUTE inside MSTACK."""
+  return UOp(Ops.MSTACK, root.dtype, tuple(s.permute(root.arg) for s in mstack.src))
+
+def custom_kernel_multi(ck:UOp) -> UOp|None:
+  """Handle CUSTOM_KERNEL with sharded sources - create per-device CUSTOM_KERNELs.
+  Unlike regular ops, we need to explicitly split CUSTOM_KERNEL per device since the
+  scheduler doesn't know how to split custom kernels automatically.
+  """
+  # Check if any sources have tuple device (sharded) - they may be MULTI or CONTIGUOUS(MULTI)
+  sharded_sources = [s for s in ck.src if isinstance(s.device, tuple)]
+  if not sharded_sources: return None
+  # Get the device tuple from the first sharded source
+  devices = sharded_sources[0].device
+  n_devices = len(devices)
+  # Validate all sharded sources have the same devices
+  if not all(s.device == devices for s in sharded_sources): return None
+  # Create one CUSTOM_KERNEL per device
+  new_kernels = []
+  for i in range(n_devices):
+    new_src = []
+    for s in ck.src:
+      if isinstance(s.device, tuple):
+        # Sharded source - use mselect to get the i-th device's version
+        new_src.append(s.mselect(i).copy_to_device(devices[i]))
+      else:
+        # Non-sharded source - copy to this device
+        new_src.append(s.copy_to_device(devices[i]))
+    new_kernels.append(ck.replace(src=tuple(new_src)))
+  return UOp(Ops.MSTACK, ck.dtype, tuple(new_kernels))
+
+def after_custom_kernel_mstack(a:UOp) -> UOp|None:
+  """Handle AFTER where kernel is MSTACK of CUSTOM_KERNELs - create per-device AFTERs."""
+  out = a.src[0]
+  ck_mstack = a.src[1]
+  if ck_mstack.op is not Ops.MSTACK: return None
+  if not all(s.op is Ops.CUSTOM_KERNEL for s in ck_mstack.src): return None
+  n_devices = len(ck_mstack.src)
+  # Output must have tuple device (sharded) - may be MULTI or CONTIGUOUS(MULTI)
+  if not isinstance(out.device, tuple): return None
+  devices = out.device
+  if len(devices) != n_devices: return None
+  # Create one AFTER per device
+  new_afters = []
+  for i in range(n_devices):
+    out_i = out.mselect(i).copy_to_device(devices[i])
+    new_afters.append(UOp(Ops.AFTER, a.dtype, (out_i, ck_mstack.src[i]), a.arg))
+  return UOp(Ops.MSTACK, a.dtype, tuple(new_afters))
+
 # NOTE: this is the same pattern as Ops.UNROLL
 multi_pm = PatternMatcher([
   (UPat(GroupOp.ALU, name="root", custom_early_reject=set([Ops.MULTI])), alu_multi),
@@ -218,11 +274,16 @@ multi_pm = PatternMatcher([
     lambda multi,device,red: multi.src[0].allreduce(red.arg, device).multi(axis=multi.axis)),
   (UPat((Ops.CAST, Ops.BITCAST, Ops.CONTIGUOUS, Ops.DETACH, Ops.CONTIGUOUS_BACKWARD),
         src=(UPat(Ops.MULTI, name="multi"), ), name="root"), passthrough_multi),
+  # Push operations inside MSTACK (result of after_custom_kernel_mstack)
+  (UPat((Ops.CAST, Ops.BITCAST, Ops.CONTIGUOUS, Ops.DETACH, Ops.CONTIGUOUS_BACKWARD),
+        src=(UPat(Ops.MSTACK, name="mstack"), ), name="root"), passthrough_mstack),
+  (UPat(Ops.PERMUTE, src=(UPat(Ops.MSTACK, name="mstack"), ), name="root"), permute_mstack),
   # multi supports custom kernels with CUSTOM_KERNEL + AFTER
-  (UPat(Ops.CUSTOM_KERNEL, src=UPat(Ops.MULTI), name="ck"),
-    lambda ck: ck.replace(src=tuple(m.src[0] for m in ck.src))),
-  (UPat(Ops.AFTER, src=(UPat(Ops.MULTI, name="multi"), UPat(Ops.CUSTOM_KERNEL)), name="a"),
-    lambda multi,a: a.replace(src=(multi.src[0],)+a.src[1:]).multi(multi.axis))
+  # CUSTOM_KERNEL with any MULTI source -> create per-device CUSTOM_KERNELs as MSTACK
+  (UPat(Ops.CUSTOM_KERNEL, name="ck"), custom_kernel_multi),
+  # AFTER with sharded output (tuple device) and MSTACK of CUSTOM_KERNELs -> create per-device AFTERs as MSTACK
+  # The output can be MULTI or CONTIGUOUS(MULTI), so we match any tensor and check device in the function
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.MSTACK)), name="a"), after_custom_kernel_mstack),
 ])+replace_allreduce
 
 def get_multi_map(big_sink:UOp) -> dict[UOp, UOp]:
