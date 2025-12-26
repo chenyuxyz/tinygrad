@@ -43,7 +43,7 @@ def create_schedule(sched_sink:UOp) -> tuple[list[ExecItem], UOp]:
       if v == 0: queue.append(k)
 
     schedule: list[tuple|UOp] = []
-    while len(queue):
+    while queue:
       k = rk = queue.popleft()
       if k.op is Ops.END: k = k.src[0]
       if k.op is Ops.RANGE: schedule.append(k)

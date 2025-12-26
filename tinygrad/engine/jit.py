@@ -26,7 +26,7 @@ def apply_graph_to_jit(jit_cache: list[ExecItem], input_rawbuffers: list[Buffer]
   def flush_batch():
     nonlocal current_batch, current_batch_devs, max_batch_size
     try:
-      if len(current_batch_devs) == 0: raise GraphException("no device for graph")
+      if not current_batch_devs: raise GraphException("no device for graph")
       if len(current_batch) <= 1 and not getenv("GRAPH_ONE_KERNEL"): raise GraphException("only one kernel doesn't graph")
       graph_runner = current_batch_devs[0].graph(current_batch, input_rawbuffers, var_vals)
       # clear jit inputs to allow their memory to be freed/reused
@@ -177,7 +177,7 @@ class CapturedJit(Generic[ReturnType]):
     for (j,i) in self._input_replace.keys(): self._jit_cache[j].bufs[i] = None
 
   def free_intermediates(self):
-    depends: set[Buffer|None] = set([None])
+    depends: set[Buffer|None] = {None}
     update_depends(depends, self.jit_cache)
     for b in depends:
       if b is not None:

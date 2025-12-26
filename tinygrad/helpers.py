@@ -61,7 +61,7 @@ def getbits(value: int, start: int, end: int): return (value >> start) & ((1 << 
 def i2u(bits: int, value: int): return value if value >= 0 else (1<<bits)+value
 def is_numpy_ndarray(x) -> bool: return str(type(x)) == "<class 'numpy.ndarray'>"
 def merge_dicts(ds:Iterable[dict[T,U]]) -> dict[T,U]:
-  kvs = set([(k,v) for d in ds for k,v in d.items()])
+  kvs = {(k,v) for d in ds for k,v in d.items()}
   if len(kvs) != len(set(kv[0] for kv in kvs)): raise RuntimeError(f"{kvs} contains different values for the same key")
   return {k:v for d in ds for k,v in d.items()}
 def partition(itr:Iterable[T], fxn:Callable[[T],bool]) -> tuple[list[T], list[T]]:
