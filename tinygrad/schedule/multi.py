@@ -202,6 +202,15 @@ def assign_multi(dest:UOp, src:UOp):
 def passthrough_multi(root:UOp, multi:UOp):
   return UOp(root.op, root.dtype, (multi.src[0],), root.arg).multi(multi.axis)
 
+def custom_kernel_multi(ck:UOp):
+  # Find devices from first MULTI source
+  devs = [m for m in ck.src if m.op is Ops.MULTI][0].src[0].device
+  def process_src(m:UOp) -> UOp:
+    if m.op is Ops.MULTI: return m.src[0]
+    # Replicate non-MULTI source to all devices via MSTACK
+    return UOp(Ops.MSTACK, m.dtype, tuple(m.copy_to_device(d) for d in devs))
+  return ck.replace(src=tuple(process_src(m) for m in ck.src))
+
 # NOTE: this is the same pattern as Ops.UNROLL
 multi_pm = PatternMatcher([
   (UPat(GroupOp.ALU, name="root", custom_early_reject=set([Ops.MULTI])), alu_multi),
@@ -219,9 +228,8 @@ multi_pm = PatternMatcher([
   (UPat((Ops.CAST, Ops.BITCAST, Ops.CONTIGUOUS, Ops.DETACH, Ops.CONTIGUOUS_BACKWARD),
         src=(UPat(Ops.MULTI, name="multi"), ), name="root"), passthrough_multi),
   # multi supports custom kernels with CUSTOM_KERNEL + AFTER
-  # Handle CUSTOM_KERNEL with at least one MULTI source - unwrap MULTI sources, keep others as-is
-  (UPat(Ops.CUSTOM_KERNEL, name="ck", custom_early_reject=set([Ops.MULTI])),
-    lambda ck: ck.replace(src=tuple(m.src[0] if m.op is Ops.MULTI else m for m in ck.src))),
+  # Handle CUSTOM_KERNEL with at least one MULTI source - unwrap MULTI sources, replicate non-MULTI sources to all devices
+  (UPat(Ops.CUSTOM_KERNEL, name="ck", custom_early_reject=set([Ops.MULTI])), custom_kernel_multi),
   (UPat(Ops.AFTER, src=(UPat(Ops.MULTI, name="multi"), UPat(Ops.CUSTOM_KERNEL)), name="a"),
     lambda multi,a: a.replace(src=(multi.src[0],)+a.src[1:]).multi(multi.axis))
 ])+replace_allreduce

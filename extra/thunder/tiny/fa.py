@@ -7,23 +7,17 @@ from extra.thunder.tiny.tk import WARP_THREADS
 from extra.thunder.tiny.tk.kernel import Kernel
 from extra.thunder.tiny.tk.tiles import GL, TileLayout
 
+def _empty_sharded(shape:tuple, device:tuple[str,...], axis:int, dtype) -> Tensor:
+  """Create a sharded empty tensor for custom kernels (avoids shard_like complexity)"""
+  num_devices = len(device)
+  per_device_shape = list(shape)
+  assert shape[axis] % num_devices == 0, f"shape[{axis}]={shape[axis]} not divisible by {num_devices}"
+  per_device_shape[axis] = shape[axis] // num_devices
+  return Tensor(Tensor.empty(*per_device_shape, device=device, dtype=dtype).uop.multi(axis), device=device)
+
 NUM_WORKERS = 1
 Q_BLOCK_SIZE = 16
 KV_BLOCK_SIZE = 16
-
-def _empty_sharded(shape:tuple, device, dtype, axis:int|None) -> Tensor:
-  """Create an empty tensor, properly sharded if device is a tuple and axis is specified."""
-  if isinstance(device, tuple) and axis is not None:
-    num_devices = len(device)
-    per_shard_shape = tuple(s // num_devices if i == axis else s for i, s in enumerate(shape))
-    return Tensor(Tensor.empty(*per_shard_shape, device=device, dtype=dtype).uop.multi(axis), device=device)
-  return Tensor.empty(*shape, device=device, dtype=dtype)
-
-def _empty_sharded_like(t: Tensor) -> Tensor:
-  """Create an empty tensor with same shape/device/dtype as t, preserving sharding."""
-  if isinstance(t.device, tuple) and t.uop.axis is not None:
-    return _empty_sharded(t.shape, t.device, t.dtype, t.uop.axis)
-  return Tensor.empty_like(t)
 
 def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False):
   if len(xq.shape) == 3: xq, xk, xv = xq.unsqueeze(0), xk.unsqueeze(0), xv.unsqueeze(0)
@@ -335,39 +329,46 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
 
       return ker.finish(2)
 
-  # Get shard axis from input (if sharded)
-  shard_axis = xq.uop.axis if isinstance(xq.device, tuple) else None
-  # For mask creation, use first device if sharded, then shard afterward
-  mask_device = xq.device[0] if isinstance(xq.device, tuple) else xq.device
+  # For sharded inputs, use first device for creating tensors
+  is_sharded = isinstance(xq.device, tuple)
+  single_device = xq.device[0] if is_sharded else xq.device
 
   if is_causal:
     if attn_mask is not None: raise RuntimeError("cannot set attn_mask when is_causal=True")
-    attn_mask = Tensor.ones((B, 1, N, N), requires_grad=False, device=mask_device, dtype=dtypes.bool).tril()
+    attn_mask = Tensor.ones((B, 1, N, N), requires_grad=False, device=single_device, dtype=dtypes.bool).tril()
   if attn_mask is not None:
     if attn_mask.dtype == dtypes.bool: attn_mask = attn_mask.where(0, -float("inf"))
-    # Shard the mask if inputs are sharded and mask is not yet sharded
-    if shard_axis is not None and isinstance(attn_mask.device, str):
-      attn_mask = attn_mask.shard(xq.device, shard_axis)
   else:
-    attn_mask = Tensor.zeros((B, 1, N, N), requires_grad=False, device=mask_device, dtype=dtypes.float32)
-    if shard_axis is not None:
-      attn_mask = attn_mask.shard(xq.device, shard_axis)
+    attn_mask = Tensor.zeros((B, 1, N, N), requires_grad=False, device=single_device, dtype=dtypes.float32)
 
-  attn = _empty_sharded_like(xq)
-  l_vec = _empty_sharded((B, H, 1, N), xq.device, dtypes.float32, shard_axis).detach()
+  # Create output tensors - use special sharded construction for CUSTOM_KERNEL compatibility
+  if is_sharded:
+    shard_axis = xq.uop.axis
+    attn = _empty_sharded(xq.shape, xq.device, shard_axis, xq.dtype)
+    l_vec = _empty_sharded((B, H, 1, N), xq.device, shard_axis, dtypes.float32).detach()
+  else:
+    attn = Tensor.empty(*xq.shape, device=single_device, dtype=xq.dtype)
+    l_vec = Tensor.empty(B, H, 1, N, device=single_device, dtype=dtypes.float32).detach()
 
   def grad(gradu:UOp, kernel:UOp) -> tuple[None, None, UOp, UOp, UOp, None]:
-    grad = Tensor(gradu)
-    grad_q = _empty_sharded_like(q := Tensor(kernel.src[2]))
-    grad_k = _empty_sharded_like(k := Tensor(kernel.src[3]))
-    grad_v = _empty_sharded_like(v := Tensor(kernel.src[4]))
+    grad_t = Tensor(gradu)
+    q, k, v = Tensor(kernel.src[2]), Tensor(kernel.src[3]), Tensor(kernel.src[4])
+    # Create gradient output tensors with proper sharding
+    if is_sharded:
+      grad_q = _empty_sharded(q.shape, q.device, shard_axis, q.dtype)
+      grad_k = _empty_sharded(k.shape, k.device, shard_axis, k.dtype)
+      grad_v = _empty_sharded(v.shape, v.device, shard_axis, v.dtype)
+    else:
+      grad_q = Tensor.empty(*q.shape, device=single_device, dtype=q.dtype)
+      grad_k = Tensor.empty(*k.shape, device=single_device, dtype=k.dtype)
+      grad_v = Tensor.empty(*v.shape, device=single_device, dtype=v.dtype)
     mask = Tensor(kernel.src[5])
 
-    delta_vec = (grad * attn).sum(-1).transpose(1, 2).unsqueeze(-2).detach()
-    print(l_vec.shape, delta_vec.shape, grad.shape, attn.shape, grad_q.shape, grad_k.shape, grad_v.shape)
+    delta_vec = (grad_t * attn).sum(-1).transpose(1, 2).unsqueeze(-2).detach()
+    print(l_vec.shape, delta_vec.shape, grad_t.shape, attn.shape, grad_q.shape, grad_k.shape, grad_v.shape)
 
-    grad_q = Tensor.custom_kernel(grad_q, grad, q, k, v, mask, l_vec, delta_vec, fxn=custom_backward_q)[0]
-    grad_k, grad_v = Tensor.custom_kernel(grad_k, grad_v, grad, q, k, v, mask, l_vec, delta_vec, fxn=custom_backward_kv)[:2]
+    grad_q = Tensor.custom_kernel(grad_q, grad_t, q, k, v, mask, l_vec, delta_vec, fxn=custom_backward_q)[0]
+    grad_k, grad_v = Tensor.custom_kernel(grad_k, grad_v, grad_t, q, k, v, mask, l_vec, delta_vec, fxn=custom_backward_kv)[:2]
     return (None, None, grad_q.uop, grad_k.uop, grad_v.uop, None)
 
   attn, l_vec = Tensor.custom_kernel(attn, l_vec, xq, xk, xv, attn_mask, fxn=custom_forward, grad_fxn=grad)[:2]
