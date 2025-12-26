@@ -321,16 +321,25 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
 
       return ker.finish(2)
 
+  # get first device for creating helper tensors (handles both single and sharded inputs)
+  first_device = xq.device[0] if isinstance(xq.device, tuple) else xq.device
+
   if is_causal:
     if attn_mask is not None: raise RuntimeError("cannot set attn_mask when is_causal=True")
-    attn_mask = Tensor.ones((B, 1, N, N), requires_grad=False, device=xq.device, dtype=dtypes.bool).tril()
+    attn_mask = Tensor.ones((B, 1, N, N), requires_grad=False, device=first_device, dtype=dtypes.bool).tril()
   if attn_mask is not None:
     if attn_mask.dtype == dtypes.bool: attn_mask = attn_mask.where(0, -float("inf"))
   else:
-    attn_mask = Tensor.zeros((B, 1, N, N), requires_grad=False, device=xq.device, dtype=dtypes.float32)
+    attn_mask = Tensor.zeros((B, 1, N, N), requires_grad=False, device=first_device, dtype=dtypes.float32)
 
-  attn = Tensor.empty_like(xq)
-  l_vec = Tensor.empty(B, H, 1, N, requires_grad=False, device=xq.device, dtype=dtypes.float32).detach()
+  attn = Tensor.empty(xq.shape, device=first_device, dtype=xq.dtype)
+  l_vec = Tensor.empty(B, H, 1, N, requires_grad=False, device=first_device, dtype=dtypes.float32).detach()
+
+  # shard helper tensors to match inputs if inputs are sharded
+  if isinstance(xq.device, tuple):
+    attn_mask = attn_mask.shard_like(xq)
+    attn = attn.shard_like(xq)
+    l_vec = l_vec.shard_like(xq)
 
   def grad(gradu:UOp, kernel:UOp) -> tuple[None, None, UOp, UOp, UOp, None]:
     grad = Tensor(gradu)

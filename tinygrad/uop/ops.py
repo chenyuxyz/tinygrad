@@ -629,6 +629,9 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
     if self.op is Ops.BUFFER: return self
     if self.op is Ops.MSELECT: return self.src[0].buf_uop.mselect(self.arg)
     if self.op is Ops.MSTACK: return UOp(Ops.MSTACK, self.dtype, src=tuple(x.buf_uop for x in self.src))
+    if self.op in {Ops.CONTIGUOUS, Ops.COPY}: return self.src[0].buf_uop
+    if self.base.op is Ops.BUFFER: return self.base
+    if self.base.op is Ops.INDEX: return self.base.src[0].buf_uop
     assert self.base.op is Ops.AFTER, f"must be AFTER {self.base.op}"
     return self.base.src[0].buf_uop.base
 
