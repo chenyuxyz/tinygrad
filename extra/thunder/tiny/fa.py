@@ -358,9 +358,9 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
 
   def grad(gradu:UOp, kernel:UOp) -> tuple[None, None, UOp, UOp, UOp, None]:
     grad = Tensor(gradu)
-    grad_q = Tensor.empty_like(q := Tensor(kernel.src[2]))
-    grad_k = Tensor.empty_like(k := Tensor(kernel.src[3]))
-    grad_v = Tensor.empty_like(v := Tensor(kernel.src[4]))
+    grad_q = _empty_sharded_like(q := Tensor(kernel.src[2]))
+    grad_k = _empty_sharded_like(k := Tensor(kernel.src[3]))
+    grad_v = _empty_sharded_like(v := Tensor(kernel.src[4]))
     mask = Tensor(kernel.src[5])
 
     delta_vec = (grad * attn).sum(-1).transpose(1, 2).unsqueeze(-2).detach()
