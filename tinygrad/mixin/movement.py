@@ -282,7 +282,7 @@ class MovementMixin:
     """
 
     def parse_side(s: str) -> tuple[list[str], list[tuple[int, int]]]:
-      """Parse one side of formula into (axis_names, groups) where groups are (start, end) index pairs for parens."""
+      """Parse one side of formula into (axis_names, dims) where dims are (start, end) index pairs for parens."""
       tokens = f" {s} ".replace("…", "...").replace("(", " ( ").replace(")", " ) ").replace(" ", "  ").replace(" 1 ", " ( ) ").split()
       lparens, rparens = [i for i, tok in enumerate(tokens) if tok == "("], [i for i, tok in enumerate(tokens) if tok == ")"]
       pairs = list(zip(lparens, rparens))
@@ -290,34 +290,28 @@ class MovementMixin:
       return [tok for tok in tokens if tok not in ("(", ")")], [(lp - 2*i, rp - 1 - 2*i) for i, (lp, rp) in enumerate(pairs)]
 
     assert formula.count("->") == 1, 'need exactly one "->" in formula'
-    lhs_axes, unflatten_groups = parse_side(formula.split("->")[0])
-    rhs_axes, flatten_groups = parse_side(formula.split("->")[1])
+    (lhs, unflatten_dims), (rhs, flatten_dims) = map(parse_side, formula.split("->"))
 
-    for name in sizes:
-      assert name in lhs_axes, f"axis {name} is not used in transform"
-    assert sorted(lhs_axes) == sorted(rhs_axes) and len(lhs_axes) == len(set(lhs_axes)), f"name mismatch in {formula}"
-    for name in lhs_axes + rhs_axes:
-      assert name == "..." or (name.isidentifier() and "_" not in (name[0], name[-1])), f"invalid axis name {name}"
-    assert "..." not in flatten([lhs_axes[s:e] for s, e in unflatten_groups]), f"cannot have collapsed ellipsis (...) in lhs of {formula}"
-    assert lhs_axes.count("...") <= 1, f"too many ellipses in {formula}"
+    for name in sizes: assert name in lhs, f"axis {name} is not used in transform"
+    assert sorted(lhs) == sorted(rhs) and len(lhs) == len(set(lhs)), f"name mismatch in {formula}"
+    for name in lhs+rhs: assert name == "..." or (name.isidentifier() and "_" not in (name[0], name[-1])), f"invalid axis name {name}"
+    assert "..." not in flatten([lhs[s:e] for s, e in unflatten_dims]), f"cannot have collapsed ellipsis (...) in lhs of {formula}"
+    assert lhs.count("...") <= 1, f"too many ellipses in {formula}"
 
-    # expand ellipsis: replace "..." with "...0", "...1", etc.
-    if "..." in lhs_axes:
-      ell_len = len(self.shape) - (len(lhs_axes) - 1 + sum(e - s - 1 for s, e in unflatten_groups))
-      def expand(axes): return axes[:(i := axes.index("..."))] + [f"...{j}" for j in range(ell_len)] + axes[i + 1:] if "..." in axes else axes
-      def shift(groups, axes, d=ell_len - 1): return [(s + (d if "...0" in axes[:s] else 0), e + (d if "...0" in axes[:e] else 0)) for s, e in groups]
-      lhs_axes, rhs_axes = expand(lhs_axes), expand(rhs_axes)
-      unflatten_groups, flatten_groups = shift(unflatten_groups, lhs_axes), shift(flatten_groups, rhs_axes)
+    # resolve ellipsis
+    if "..." in lhs:
+      ell_len = len(self.shape) - len(lhs) + 1 + sum(e - s - 1 for s, e in unflatten_dims)
+    lhs, rhs = map(lambda l: l[:(i := l.index("..."))] + [f"...{j}" for j in range(ell_len)] + l[i + 1:] if "..." in l else l, (lhs, rhs))
+    unflatten_dims = [(s + (ell_len - 1 if "...0" in lhs[:s] else 0), e + (ell_len - 1 if "...0" in lhs[:e] else 0)) for s, e in unflatten_dims]
+    flatten_dims = [(s + (ell_len - 1 if "...0" in rhs[:s] else 0), e + (ell_len - 1 if "...0" in rhs[:e] else 0)) for s, e in flatten_dims]
 
     # unflatten -> permute -> flatten
     t = self
-    for start, end in unflatten_groups:
-      t = t.unflatten(start, tuple(sizes.get(lhs_axes[i], -1) for i in range(start, end)))
-    for i, name in enumerate(lhs_axes):
-      assert name not in sizes or sizes[name] == t.shape[i], f"size provided for dimension {name} incorrect"
-    t = t.permute([lhs_axes.index(name) for name in rhs_axes])
-    for start, end in reversed(flatten_groups):
-      t = t.flatten(start, end - 1) if start < end else t.unsqueeze(start)
+    for start, end in unflatten_dims: t = t.unflatten(start, tuple(sizes.get(lhs[i], -1) for i in range(start, end)))
+    for i, name in enumerate(lhs):
+      if name in sizes: assert sizes[name] == t.shape[i], f"size provided for dimension {name} incorrect"
+    t = t.permute([lhs.index(name) for name in rhs])
+    for start, end in reversed(flatten_dims): t = t.flatten(start, end - 1) if start < end else t.unsqueeze(start)
     return t
 
   # *** movement ops with expand ***
