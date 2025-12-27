@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Callable, cast, TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 import functools
 from dataclasses import dataclass, field
 from tinygrad.helpers import to_function_name, dedup, prod, DEBUG
@@ -45,11 +45,16 @@ class Estimates:
           mem[(buf, u.op)] = buf.ptrdtype.size * buf.dtype.itemsize
       if u.op is Ops.RANGE:
         mult_stack.append(mults)
-        mults *= cast(sint, u.src[0].ssimplify())
+        range_size = u.src[0].ssimplify()
+        assert isinstance(range_size, (int, UOp)), f"range size must be sint, got {type(range_size)}"
+        mults *= range_size
         # SPECIAL are already counted in mults
         mults = mults.substitute({x:x.const_like(0) for x in mults.toposort() if x.op is Ops.SPECIAL}) if isinstance(mults, UOp) else mults
       elif u.op is Ops.END: mults = mult_stack.pop(-1)
-      elif u.op is Ops.SPECIAL: mults *= cast(sint, u.src[0].ssimplify()) # NOTE: we don't push to the mult_stack here, you can't end these
+      elif u.op is Ops.SPECIAL:
+        special_size = u.src[0].ssimplify()
+        assert isinstance(special_size, (int, UOp)), f"special size must be sint, got {type(special_size)}"
+        mults *= special_size  # NOTE: we don't push to the mult_stack here, you can't end these
       elif u.op is Ops.LOAD and (not isinstance(u.src[0].dtype, PtrDType) or u.src[0].dtype.addrspace != AddrSpace.REG):
         lds += u.dtype.itemsize * mults
       elif u.op is Ops.STORE and (not isinstance(u.src[0].dtype, PtrDType) or u.src[0].dtype.addrspace != AddrSpace.REG):
@@ -120,8 +125,10 @@ class ProgramSpec:
       if u.op is Ops.SPECIAL:
         if u.arg[0] == 'i': local_size = None
         special_size = local_size if u.arg[0] == 'l' else global_size
-        # TODO: this cast is wrong, u.src[0].ssimplify() can be sint
-        if special_size is not None: special_size[int(u.arg[-1])] = cast(int, u.src[0].ssimplify())
+        if special_size is not None:
+          size = u.src[0].ssimplify()
+          assert isinstance(size, int), f"special size must be concrete int, got {type(size)}"
+          special_size[int(u.arg[-1])] = size
 
     return ProgramSpec(sink.arg.name, source.arg, device.arg, sink, uops, lib, global_size, local_size,
                        sorted(_vars, key=lambda v: v.arg), sorted(dedup(_globals)), sorted(dedup(outs)), sorted(dedup(ins)))

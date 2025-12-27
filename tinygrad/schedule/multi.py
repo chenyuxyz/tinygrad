@@ -1,4 +1,3 @@
-from typing import cast
 import functools, itertools, operator
 from tinygrad.helpers import all_same, all_int, prod, DEBUG, RING, getenv
 from tinygrad.uop.ops import Ops, UOp, sint, PatternMatcher, UPat, GroupOp, graph_rewrite_map, graph_rewrite
@@ -21,7 +20,11 @@ def handle_allreduce_multirank(buf:UOp, red:UOp) -> UOp|None:
   if len(groups) <= 1 or not any(len(g) > 1 for g in groups.values()): return None
 
   # Reduce inside each group
-  inner = [UOp(Ops.MSTACK, buf.dtype, tuple(bufs)).allreduce(red.arg, (cast(str, bufs[0].device),)).mselect(0) for bufs in groups.values()]
+  def make_inner(bufs):
+    dev = bufs[0].device
+    assert isinstance(dev, str), f"expected str device, got {type(dev)}"
+    return UOp(Ops.MSTACK, buf.dtype, tuple(bufs)).allreduce(red.arg, (dev,)).mselect(0)
+  inner = [make_inner(bufs) for bufs in groups.values()]
 
   # Allreduce across groups
   outer = UOp(Ops.MSTACK, buf.dtype, tuple(inner)).allreduce(red.arg, tuple(buf.device for buf in inner))
@@ -73,7 +76,8 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
     for step in range(n_lbs-1):
       dest = (i+step)%n_lbs
       this_chunk[dest] = c = c.copy_to_device(buf.device[dest])
-    copied_chunks.append(UOp(Ops.MSTACK, buf.dtype, tuple(cast(list[UOp], this_chunk))))
+    assert all(x is not None for x in this_chunk), "not all chunks were filled"
+    copied_chunks.append(UOp(Ops.MSTACK, buf.dtype, tuple(x for x in this_chunk if x is not None)))
 
   # reassemble
   pads = [((s,numel-e),) for s,e in chunks]

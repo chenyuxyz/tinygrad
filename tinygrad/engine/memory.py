@@ -1,4 +1,3 @@
-from typing import cast
 from collections import defaultdict
 from tinygrad.engine.realize import ExecItem
 from tinygrad.device import Device, Buffer
@@ -34,12 +33,18 @@ def _internal_memory_planner(buffers:list[list[Buffer]], noopt_buffers=None, ign
     # Check if suballocation is possible for the given buffer and device.
     if hasattr(Device[buf.device].allocator, "_offset") and not isinstance(buf.dtype, ImageDType):
       if is_open_ev: buffer_replace[buf] = (None, global_planner[buf.device][1].alloc(round_up(buf.nbytes, 0x1000)))
-      else: global_planner[buf.device][1].free(cast(int, buffer_replace[buf][1]))
+      else:
+        offset = buffer_replace[buf][1]
+        assert offset is not None, "buffer must have been opened before closing"
+        global_planner[buf.device][1].free(offset)
       global_planner[buf.device] = (max(global_planner[buf.device][0], buffer_replace[buf][1] + buf.nbytes), global_planner[buf.device][1])
     else:
       key = (buf.device, buf.dtype, buf.options, buf.nbytes)
       if is_open_ev: buffer_replace[buf] = (reuse_buffers[key].pop(), None) if key in reuse_buffers and len(reuse_buffers[key]) > 0 else (buf, None)
-      else: reuse_buffers[key].append(cast(Buffer, buffer_replace[buf][0]))
+      else:
+        reuse_buf = buffer_replace[buf][0]
+        assert reuse_buf is not None, "buffer must have been opened before closing"
+        reuse_buffers[key].append(reuse_buf)
 
   # Allocate global buffers based on the memory planner.
   global_buffers = {dev: Buffer(dev, round_up(sz, 0x1000), dtypes.int8) for dev, (sz, _) in global_planner.items()}
