@@ -282,32 +282,17 @@ class MovementMixin:
     """
 
     def parse_side(s: str) -> tuple[list[str], list[tuple[int, int]]]:
-      """Parse one side of the formula, returning (axis_names, groups).
-      - axis_names: ordered list of axis names with parens removed
-      - groups: (start, end) index pairs for each parenthesized group in axis_names
-      """
-      # normalize whitespace and parens: "a (b c) d" -> ["a", "(", "b", "c", ")", "d"], and "1" -> "()"
-      s = f" {s} ".replace("…", "...").replace("(", " ( ").replace(")", " ) ").replace(" ", "  ").replace(" 1 ", " ( ) ")
-      tokens = s.split()
-
-      # find matching parentheses pairs
-      lparens = [i for i, tok in enumerate(tokens) if tok == "("]
-      rparens = [i for i, tok in enumerate(tokens) if tok == ")"]
+      """Parse one side of formula into (axis_names, groups) where groups are (start, end) index pairs for parens."""
+      tokens = f" {s} ".replace("…", "...").replace("(", " ( ").replace(")", " ) ").replace(" ", "  ").replace(" 1 ", " ( ) ").split()
+      lparens, rparens = [i for i, tok in enumerate(tokens) if tok == "("], [i for i, tok in enumerate(tokens) if tok == ")"]
       pairs = list(zip(lparens, rparens))
       assert len(lparens) == len(rparens) and sorted(flatten(pairs)) == flatten(pairs), "bracket mismatch"
+      return [tok for tok in tokens if tok not in ("(", ")")], [(lp - 2*i, rp - 1 - 2*i) for i, (lp, rp) in enumerate(pairs)]
 
-      # extract axis names and compute group ranges (adjusting for removed parens)
-      axis_names = [tok for tok in tokens if tok not in ("(", ")")]
-      groups = [(lp - 2*i, rp - 1 - 2*i) for i, (lp, rp) in enumerate(pairs)]
-      return axis_names, groups
-
-    # parse "lhs -> rhs" into axis names and parenthesized groups
     assert formula.count("->") == 1, 'need exactly one "->" in formula'
-    lhs, rhs = formula.split("->")
-    lhs_axes, unflatten_groups = parse_side(lhs)  # parens on lhs = unflatten (split dims)
-    rhs_axes, flatten_groups = parse_side(rhs)    # parens on rhs = flatten (merge dims)
+    lhs_axes, unflatten_groups = parse_side(formula.split("->")[0])
+    rhs_axes, flatten_groups = parse_side(formula.split("->")[1])
 
-    # validate axis names and sizes
     for name in sizes:
       assert name in lhs_axes, f"axis {name} is not used in transform"
     assert sorted(lhs_axes) == sorted(rhs_axes) and len(lhs_axes) == len(set(lhs_axes)), f"name mismatch in {formula}"
@@ -316,44 +301,23 @@ class MovementMixin:
     assert "..." not in flatten([lhs_axes[s:e] for s, e in unflatten_groups]), f"cannot have collapsed ellipsis (...) in lhs of {formula}"
     assert lhs_axes.count("...") <= 1, f"too many ellipses in {formula}"
 
-    # expand ellipsis: replace "..." with "...0", "...1", etc. for each dimension it covers
+    # expand ellipsis: replace "..." with "...0", "...1", etc.
     if "..." in lhs_axes:
-      # count explicit lhs dims (each group adds (end-start-1) extra dims via unflatten)
-      n_explicit = len(lhs_axes) - 1 + sum(e - s - 1 for s, e in unflatten_groups)
-      ell_len = len(self.shape) - n_explicit
+      ell_len = len(self.shape) - (len(lhs_axes) - 1 + sum(e - s - 1 for s, e in unflatten_groups))
+      def expand(axes): return axes[:(i := axes.index("..."))] + [f"...{j}" for j in range(ell_len)] + axes[i + 1:] if "..." in axes else axes
+      def shift(groups, axes, d=ell_len - 1): return [(s + (d if "...0" in axes[:s] else 0), e + (d if "...0" in axes[:e] else 0)) for s, e in groups]
+      lhs_axes, rhs_axes = expand(lhs_axes), expand(rhs_axes)
+      unflatten_groups, flatten_groups = shift(unflatten_groups, lhs_axes), shift(flatten_groups, rhs_axes)
 
-      def expand_ellipsis(axes: list[str]) -> list[str]:
-        if "..." not in axes: return axes
-        i = axes.index("...")
-        return axes[:i] + [f"...{j}" for j in range(ell_len)] + axes[i + 1:]
-
-      def shift_groups_for_ellipsis(groups: list[tuple[int, int]], axes: list[str]) -> list[tuple[int, int]]:
-        # after expanding "..." to ell_len items, indices after the ellipsis shift by (ell_len - 1)
-        shift = ell_len - 1
-        return [(s + (shift if "...0" in axes[:s] else 0), e + (shift if "...0" in axes[:e] else 0)) for s, e in groups]
-
-      lhs_axes, rhs_axes = expand_ellipsis(lhs_axes), expand_ellipsis(rhs_axes)
-      unflatten_groups = shift_groups_for_ellipsis(unflatten_groups, lhs_axes)
-      flatten_groups = shift_groups_for_ellipsis(flatten_groups, rhs_axes)
-
-    # step 1: unflatten - split tensor dims according to lhs groups
-    # e.g., "(a b)" with dim=12 and a=3 -> splits into dims [3, 4]
+    # unflatten -> permute -> flatten
     t = self
     for start, end in unflatten_groups:
       t = t.unflatten(start, tuple(sizes.get(lhs_axes[i], -1) for i in range(start, end)))
-
-    # verify any explicitly provided sizes match the tensor shape
     for i, name in enumerate(lhs_axes):
       assert name not in sizes or sizes[name] == t.shape[i], f"size provided for dimension {name} incorrect"
-
-    # step 2: permute - reorder dims from lhs order to rhs order
     t = t.permute([lhs_axes.index(name) for name in rhs_axes])
-
-    # step 3: flatten/unsqueeze - merge dims according to rhs groups (process in reverse to keep indices valid)
-    # groups with start < end flatten those dims, empty groups (start == end) add a dim of size 1
     for start, end in reversed(flatten_groups):
       t = t.flatten(start, end - 1) if start < end else t.unsqueeze(start)
-
     return t
 
   # *** movement ops with expand ***
