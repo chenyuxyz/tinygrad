@@ -120,8 +120,9 @@ class ProgramSpec:
       if u.op is Ops.SPECIAL:
         if u.arg[0] == 'i': local_size = None
         special_size = local_size if u.arg[0] == 'l' else global_size
-        # TODO: this cast is wrong, u.src[0].ssimplify() can be sint
-        if special_size is not None: special_size[int(u.arg[-1])] = cast(int, u.src[0].ssimplify())
+        val = u.src[0].ssimplify()
+        assert isinstance(val, int), f"SPECIAL size must be concrete, got {val}"
+        if special_size is not None: special_size[int(u.arg[-1])] = val
 
     return ProgramSpec(sink.arg.name, source.arg, device.arg, sink, uops, lib, global_size, local_size,
                        sorted(_vars, key=lambda v: v.arg), sorted(dedup(_globals)), sorted(dedup(outs)), sorted(dedup(ins)))
