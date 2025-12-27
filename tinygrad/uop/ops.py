@@ -619,7 +619,10 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
     if self.op is Ops.MSELECT:
       assert isinstance(self.src[0].device, tuple), f"mselect must be on tuple device, getting {self.src[0].device}"
       return self.src[0].device[self.arg]
-    if self.op is Ops.MSTACK: return tuple(cast(str, x.device) for x in self.src)
+    if self.op is Ops.MSTACK:
+      devs = tuple(x.device for x in self.src)
+      assert all(isinstance(d, str) for d in devs)
+      return devs  # type: ignore[return-value]
     if self.op in {Ops.COPY, Ops.BUFFER, Ops.ALLREDUCE}: return self.src[1].device
     for x in self.src:
       if x._device is not None: return x._device
@@ -662,7 +665,8 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
       return ret.bufs[self.arg]
     if self.op is Ops.MSTACK:
       ret = MultiBuffer.__new__(MultiBuffer)
-      ret.bufs = [cast(Buffer, x.buffer) for x in self.src]
+      ret.bufs = [x.buffer for x in self.src]  # type: ignore[misc]
+      assert all(isinstance(b, Buffer) for b in ret.bufs)
       assert all_same([x.size for x in ret.bufs]) and all_same([x.dtype for x in ret.bufs]), "multibuffers mismatch buffers"
       return ret
     assert self.op is Ops.BUFFER, f"must be BUFFER {self.op}"
@@ -819,7 +823,9 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
     ctx: dict[UOp, str] = {}
     pm = renderer if pm is None else pm
     for u in (s:=self.simplify() if simplify else self).toposort():
-      ctx[u] = cast(str, pm.rewrite(u, ctx=ctx))
+      ret = pm.rewrite(u, ctx=ctx)
+      assert isinstance(ret, str)
+      ctx[u] = ret
     return ctx[s]
 
   def pyrender(self): return pyrender(self)
@@ -1448,7 +1454,7 @@ def pyrender(ast:UOp) -> str:
       if u.arg.ast not in kernels:
         kernels[u.arg.ast] = (f"k{len(kernels)}", f"def k{len(kernels)}():\n  " + pyrender(u.arg.ast).replace('\n', '\n  ') + "\n  return ast\n\n")
       r[u.arg.ast] = kernels[u.arg.ast][0]
-    ren = cast(str, pm_pyrender.rewrite(u, ctx=r))
+    ren = pm_pyrender.rewrite(u, ctx=r)
     assert isinstance(ren, str)
     if u.tag is not None: ren += f".rtag({repr(u.tag)})"
     if u not in to_render: r[u] = ren

@@ -144,8 +144,13 @@ class MultiGraphRunner(GraphRunner):
     return isinstance(ei.prg, (CompiledRunner, BufferXfer)) and len(dedup([type(Device[b.device]) for b in ei.bufs if b]+[type(d) for d in devs]))==1
 
 def get_out_buffers_for_ei(ei:ExecItem) -> list[Buffer]:
-  if isinstance(ei.prg, CompiledRunner): return [cast(Buffer, ei.bufs[out]) for out in ei.prg.p.outs if out not in ei.prg.p.ins]
-  if isinstance(ei.prg, (BufferCopy, BufferXfer, EncDec)): return [cast(Buffer, ei.bufs[0])]
+  if isinstance(ei.prg, CompiledRunner):
+    ret = [ei.bufs[out] for out in ei.prg.p.outs if out not in ei.prg.p.ins]
+    assert all(b is not None for b in ret)
+    return ret  # type: ignore[return-value]
+  if isinstance(ei.prg, (BufferCopy, BufferXfer, EncDec)):
+    assert ei.bufs[0] is not None
+    return [ei.bufs[0]]
   return []
 
 def update_depends(depends:set[Buffer|None], jit_cache:list[ExecItem]):
@@ -314,14 +319,15 @@ class TinyJit(Generic[ReturnType]):
         if DEBUG >= 1: print(f"pruned from {len(jit_cache)} -> {len(pruned)} kernels")
         # run the onetime kernels here
         for ei in onetime:
-          for b in ei.bufs: cast(Buffer, b).ensure_allocated()
+          for b in ei.bufs:
+            if b is not None: b.ensure_allocated()
           ei.run(var_vals, jit=True)
         jit_cache = pruned
 
       # memory planning (optional)
       # Exclude buffers involved in transfer ops to preserve parallelism.
       noopt_buffers = {b for ji in jit_cache if isinstance(ji.prg, (BufferXfer, BufferCopy, EncDec)) for b in ji.bufs}
-      assigned = _internal_memory_planner([cast(list[Buffer], item.bufs) for item in jit_cache], noopt_buffers, debug_prefix="JIT ")
+      assigned = _internal_memory_planner([[b for b in item.bufs if b is not None] for item in jit_cache], noopt_buffers, debug_prefix="JIT ")
       jit_cache = [replace(item, bufs=[assigned.get(b,b).ensure_allocated() for b in item.bufs if b is not None]) for item in jit_cache]
 
       input_replace = get_input_replace(jit_cache, input_buffers)

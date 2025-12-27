@@ -298,7 +298,9 @@ class Tensor(OpMixin):
   def _buffer(self) -> Buffer:
     x = self.cast(self.dtype.base).contiguous()
     if isinstance(self.device, tuple): x = x.to("CPU")
-    return cast(Buffer, x.realize().uop.base.buffer).ensure_allocated()
+    buf = x.realize().uop.base.buffer
+    assert isinstance(buf, Buffer)
+    return buf.ensure_allocated()
   def _data(self) -> memoryview: return self._buffer().as_buffer()
 
   def data(self) -> memoryview:
@@ -516,7 +518,9 @@ class Tensor(OpMixin):
     """
     r = Tensor.empty(*shape, **kwargs)
     assert isinstance(r.device, str)
-    cast(Buffer, r.uop.buffer).allocate(external_ptr=ptr)
+    buf = r.uop.buffer
+    assert isinstance(buf, Buffer)
+    buf.allocate(external_ptr=ptr)
     return r
 
   @staticmethod
@@ -1144,14 +1148,17 @@ class Tensor(OpMixin):
             # if we're slicing a symbolic dimension into a int dimension, we can slice untill the bind size
             # TODO: right now this is using vmax instead of the bind size because jit doesnt update the bound value of the returned tensor
             if isinstance(size, UOp): size = int(size.vmax)
-            *boundary, stride = index.indices(cast(SupportsIndex, size))
+            assert isinstance(size, int)
+            *boundary, stride = index.indices(size)
             if stride * (boundary[1] - boundary[0]) < 0: boundary = [0, 0]
             elif stride < 0: boundary = [boundary[1] + 1, boundary[0] + 1]
             # update size for slice
             size = ceildiv((boundary[1] - boundary[0]), abs(stride))
           elif resolve(step == 1, False) and all(isinstance(s,sint) for s in (start, stop)) and resolve((stop-start) > 0, False):
             # simple symbolic slice
-            size = cast(sint, cast(UOp, (stop - start)).ssimplify())
+            diff = stop - start
+            assert isinstance(diff, UOp)
+            size = diff.ssimplify()  # type: ignore[assignment]
           else: raise TypeError(f"slice {index=} is not supported")
         case None: pass # do nothing
         case _: raise IndexError(f"{type(index).__name__} indexing is not supported")
@@ -1713,8 +1720,8 @@ class Tensor(OpMixin):
     """
     output_dtype = self.dtype if dtypes.is_float(self.dtype) else dtypes.float32
     numerator = self.cast(sum_acc_dtype(self.dtype)).sum(axis=axis, keepdim=keepdim)
-    return numerator.div(prod([cast(int, si) for si, so in zip(self.shape, self.sum(axis=axis, keepdim=True).shape) if resolve(si != so)])) \
-      .cast(output_dtype)
+    divisor = prod([si for si, so in zip(self.shape, self.sum(axis=axis, keepdim=True).shape) if resolve(si != so)])
+    return numerator.div(divisor).cast(output_dtype)  # type: ignore[arg-type]
 
   def var(self, axis:int|Sequence[int]|None=None, keepdim=False, correction=1) -> Tensor:
     """

@@ -144,7 +144,9 @@ class ExecItem:
   def lower(self):
     """Populate self.prg by lowering the AST."""
     if self.prg is not None: return self
-    try: self.prg = cast(Runner, si_lowerer.rewrite(self.ast, self.bufs))
+    try:
+      self.prg = si_lowerer.rewrite(self.ast, self.bufs)
+      assert isinstance(self.prg, Runner)
     except Exception as e:
       if DEBUG >= 2:
         print(f"error lowering {self.ast.op}")
@@ -159,7 +161,7 @@ class ExecItem:
     var_vals = self.fixedvars if _var_vals is None else (_var_vals|self.fixedvars)
     # reorder bufs to match program globals if needed
     _bufs = [self.bufs[i] for i in self.prg.p.globals] if isinstance(self.prg, CompiledRunner) else self.bufs
-    bufs = cast(list[Buffer], [unwrap(x) for x in _bufs] if jit else [unwrap(x).ensure_allocated() for x in _bufs])
+    bufs = [unwrap(x) for x in _bufs] if jit else [unwrap(x).ensure_allocated() for x in _bufs]
     if PROFILE:
       payload = {"metadata":self.metadata, "var_vals":var_vals, "bufs":[b.trace_num for b in bufs], "name":self.prg.display_name}
       payload["outputs"], payload["inputs"] = (self.prg.p.outs, self.prg.p.ins) if isinstance(self.prg, CompiledRunner) else ([0], [1])

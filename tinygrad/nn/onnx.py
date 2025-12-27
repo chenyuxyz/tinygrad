@@ -810,7 +810,8 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
     # the permute aligns X's axes to scales, sizes, and roi
     X = X.permute(*perm)
 
-    input_shape = cast(tuple[int, ...], X.shape[2:])
+    input_shape = X.shape[2:]
+    assert all(isinstance(s, int) for s in input_shape)
     if scales is not None: assert all(sc==1 for sc in scales[:-len(input_shape)]), "resizing batch_size dim or channel dim not supported"
     if sizes is not None: assert tuple(sizes[:-2]) == tuple(X.shape[X.ndim-len(sizes):-2]), "resizing batch_size dim or channel dim not supported"
 
@@ -862,7 +863,8 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
 
       expand = list(X.shape)
       for i in range(-len(sizes), 0):
-        input_sz = cast(int, X.shape[i])
+        input_sz = X.shape[i]
+        assert isinstance(input_sz, int)
         reshape, index = [1] * X.ndim, indexes[i]
         reshape[i] = expand[i] = sizes[i]
 
