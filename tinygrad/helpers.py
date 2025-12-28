@@ -544,9 +544,7 @@ def _serialize_module(module:types.ModuleType): return importlib.import_module, 
 copyreg.pickle(types.ModuleType, _serialize_module)
 
 class count:
-  def __init__(self, start:int=0, step:int=1):
-    self.n, self.step = start, step
+  def __init__(self, start:int=0): self.n = start
   def __next__(self) -> int:
-    cur = self.n
-    self.n += self.step
-    return cur
+    self.n += 1
+    return self.n - 1

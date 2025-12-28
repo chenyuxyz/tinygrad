@@ -126,11 +126,11 @@ class TestCount(unittest.TestCase):
     self.assertEqual(next(c), 3)
     self.assertEqual(next(c), 4)
 
-  def test_count_step_pickle(self):
-    c = count(1, 2)
+  def test_count_pickle(self):
+    c = count(1)
     self.assertEqual(next(c), 1)
     c2 = pickle.loads(pickle.dumps(c))
-    self.assertEqual(next(c2), 3)
+    self.assertEqual(next(c2), 2)
 
 @unittest.skip("no fetch tests because they need internet")
 class TestFetch(unittest.TestCase):
