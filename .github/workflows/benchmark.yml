@@ -119,6 +119,10 @@ jobs:
     # TODO: too slow
     # - name: Run 10 CIFAR training steps w winograd
     #   run: BENCHMARK_LOG=cifar_10steps_wino JIT=1 ASSERT_MIN_STEP_TIME=150 WINO=1 STEPS=10 python3.11 examples/hlb_cifar10.py
+    - uses: actions/upload-artifact@v4
+      with:
+        name: Speed (Mac)
+        path: onnx_inference_speed.csv
     - name: Run process replay tests
       run: cp test/external/process_replay/process_replay.py ./process_replay.py && git fetch origin master && git -c advice.detachedHead=false checkout origin/master && PYTHONPATH=. python3.11 process_replay.py
 
@@ -243,6 +247,10 @@ jobs:
       run: BENCHMARK_LOG=gpt2_half NV=1 HALF=1 ASSERT_MIN_STEP_TIME=6 python3 examples/gpt2.py --count 10 --temperature 0 --timing
     - name: Run GPT2 w HALF/BEAM
       run: BENCHMARK_LOG=gpt2_half_beam NV=1 HALF=1 JITBEAM=2 IGNORE_BEAM_CACHE=1 python3 examples/gpt2.py --count 10 --temperature 0 --timing
+    - uses: actions/upload-artifact@v4
+      with:
+        name: Speed (NVIDIA)
+        path: onnx_inference_speed.csv
     - name: Run process replay tests
       run: cp test/external/process_replay/process_replay.py ./process_replay.py && git fetch origin master && git -c advice.detachedHead=false checkout origin/master && PYTHONPATH=. python3 process_replay.py
 
@@ -415,6 +423,10 @@ jobs:
       run: BENCHMARK_LOG=gpt2_half AMD=1 HALF=1 ASSERT_MIN_STEP_TIME=5 python3 examples/gpt2.py --count 10 --temperature 0 --timing
     - name: Run GPT2 w HALF/BEAM
       run: BENCHMARK_LOG=gpt2_half_beam AMD=1 HALF=1 JITBEAM=2 IGNORE_BEAM_CACHE=1 python3 examples/gpt2.py --count 10 --temperature 0 --timing
+    - uses: actions/upload-artifact@v4
+      with:
+        name: Speed (AMD)
+        path: onnx_inference_speed.csv
     - name: Run process replay tests
       run: cp test/external/process_replay/process_replay.py ./process_replay.py && git fetch origin master && git -c advice.detachedHead=false checkout origin/master && PYTHONPATH=. python3 process_replay.py
 
