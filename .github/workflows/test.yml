@@ -705,7 +705,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [ptx, nv]
+        include:
+          - backend: ptx
+            CUDA: 1
+            CUDA_PTX: 1
+          - backend: nv
+            NV: 1
+            SKIP_SLOW_TEST: 1
 
     name: Linux (${{ matrix.backend }})
     runs-on: ubuntu-22.04
@@ -713,10 +719,10 @@ jobs:
     env:
       MOCKGPU: 1
       FORWARD_ONLY: 1
-      CUDA: ${{ matrix.backend == 'ptx' && '1' || '' }}
-      CUDA_PTX: ${{ matrix.backend == 'ptx' && '1' || '' }}
-      NV: ${{ matrix.backend == 'nv' && '1' || '' }}
-      SKIP_SLOW_TEST: ${{ matrix.backend == 'nv' && '1' || '' }}
+      CUDA: ${{ matrix.CUDA }}
+      CUDA_PTX: ${{ matrix.CUDA_PTX }}
+      NV: ${{ matrix.NV }}
+      SKIP_SLOW_TEST: ${{ matrix.SKIP_SLOW_TEST }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -741,17 +747,29 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [llvm, cpu, opencl, lvp]
+        include:
+          - backend: llvm
+            CPU: 1
+            CPU_LLVM: 1
+          - backend: cpu
+            CPU: 1
+            CPU_LLVM: 0
+            CPU_COUNT: 2
+          - backend: opencl
+            CL: 1
+          - backend: lvp
+            CPU: 1
+            CPU_LVP: 1
 
     name: Linux (${{ matrix.backend }})
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     env:
-      CPU: ${{ matrix.backend != 'opencl' && '1' || '' }}
-      CPU_LLVM: ${{ matrix.backend == 'llvm' && '1' || matrix.backend == 'cpu' && '0' || '' }}
-      CPU_COUNT: ${{ matrix.backend == 'cpu' && '2' || '' }}
-      CPU_LVP: ${{ matrix.backend == 'lvp' && '1' || '' }}
-      CL: ${{ matrix.backend == 'opencl' && '1' || '' }}
+      CPU: ${{ matrix.CPU }}
+      CPU_LLVM: ${{ matrix.CPU_LLVM }}
+      CPU_COUNT: ${{ matrix.CPU_COUNT }}
+      CPU_LVP: ${{ matrix.CPU_LVP }}
+      CL: ${{ matrix.CL }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -875,16 +893,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [metal, llvm, cpu, lvp]
+        include:
+          - backend: metal
+            METAL: 1
+          - backend: llvm
+            CPU: 1
+            CPU_LLVM: 1
+          - backend: cpu
+            CPU: 1
+            CPU_LLVM: 0
+            CPU_COUNT: 2
+          - backend: lvp
+            CPU: 1
+            CPU_LVP: 1
     name: MacOS (${{ matrix.backend }})
     runs-on: macos-15
     timeout-minutes: 20
     env:
-      CPU: ${{ matrix.backend != 'metal' && '1' || '' }}
-      CPU_LLVM: ${{ matrix.backend == 'llvm' && '1' || matrix.backend == 'cpu' && '0' || '' }}
-      CPU_COUNT: ${{ matrix.backend == 'cpu' && '2' || '' }}
-      CPU_LVP: ${{ matrix.backend == 'lvp' && '1' || '' }}
-      METAL: ${{ matrix.backend == 'metal' && '1' || '' }}
+      CPU: ${{ matrix.CPU }}
+      CPU_LLVM: ${{ matrix.CPU_LLVM }}
+      CPU_COUNT: ${{ matrix.CPU_COUNT }}
+      CPU_LVP: ${{ matrix.CPU_LVP }}
+      METAL: ${{ matrix.METAL }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -914,16 +944,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [llvm, cpu, webgpu]
+        include:
+          - backend: llvm
+            CPU: 1
+            CPU_LLVM: 1
+          - backend: cpu
+            CPU: 1
+            CPU_LLVM: 0
+            CPU_COUNT: 2
+          - backend: webgpu
+            WEBGPU: 1
 
     name: Windows (${{ matrix.backend }})
     runs-on: windows-latest
     timeout-minutes: 15
     env:
-      CPU: ${{ matrix.backend != 'webgpu' && '1' || '' }}
-      CPU_LLVM: ${{ matrix.backend == 'llvm' && '1' || matrix.backend == 'cpu' && '0' || '' }}
-      CPU_COUNT: ${{ matrix.backend == 'cpu' && '2' || '' }}
-      WEBGPU: ${{ matrix.backend == 'webgpu' && '1' || '' }}
+      CPU: ${{ matrix.CPU }}
+      CPU_LLVM: ${{ matrix.CPU_LLVM }}
+      CPU_COUNT: ${{ matrix.CPU_COUNT }}
+      WEBGPU: ${{ matrix.WEBGPU }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -949,14 +988,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [ir3, nak]
+        include:
+          - backend: ir3
+            NULL_IR3: 1
+          - backend: nak
+            NULL_NAK: 1
     name: Compile-only (${{ matrix.backend }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       NULL: 1
-      NULL_IR3: ${{ matrix.backend == 'ir3' && '1' || '' }}
-      NULL_NAK: ${{ matrix.backend == 'nak' && '1' || '' }}
+      NULL_IR3: ${{ matrix.NULL_IR3 }}
+      NULL_NAK: ${{ matrix.NULL_NAK }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
