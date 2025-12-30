@@ -707,11 +707,9 @@ jobs:
       matrix:
         include:
           - backend: ptx
-            CUDA: 1
-            CUDA_PTX: 1
+            env: CUDA=1 CUDA_PTX=1
           - backend: nv
-            NV: 1
-            SKIP_SLOW_TEST: 1
+            env: NV=1 SKIP_SLOW_TEST=1
 
     name: Linux (${{ matrix.backend }})
     runs-on: ubuntu-22.04
@@ -719,10 +717,6 @@ jobs:
     env:
       MOCKGPU: 1
       FORWARD_ONLY: 1
-      CUDA: ${{ matrix.CUDA }}
-      CUDA_PTX: ${{ matrix.CUDA_PTX }}
-      NV: ${{ matrix.NV }}
-      SKIP_SLOW_TEST: ${{ matrix.SKIP_SLOW_TEST }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -735,11 +729,11 @@ jobs:
           ocelot: 'true'
       - name: Check Device.DEFAULT and print some source
         run: |
-          python3 -c "from tinygrad import Device; assert Device.DEFAULT in ['CUDA','NV'], Device.DEFAULT"
-          DEBUG=5 FORWARD_ONLY=1 python3 test/test_ops.py TestOps.test_add
+          ${{ matrix.env }} python3 -c "from tinygrad import Device; assert Device.DEFAULT in ['CUDA','NV'], Device.DEFAULT"
+          ${{ matrix.env }} DEBUG=5 FORWARD_ONLY=1 python3 test/test_ops.py TestOps.test_add
       - name: Run pytest (cuda)
         # skip multitensor because it's slow
-        run: python -m pytest -n=auto test/ --ignore=test/models --ignore=test/unit --ignore test/test_gc.py --ignore test/test_multitensor.py --durations=20
+        run: ${{ matrix.env }} python -m pytest -n=auto test/ --ignore=test/models --ignore=test/unit --ignore test/test_gc.py --ignore test/test_multitensor.py --durations=20
       - name: Run process replay tests
         uses: ./.github/actions/process-replay
 
@@ -749,27 +743,17 @@ jobs:
       matrix:
         include:
           - backend: llvm
-            CPU: 1
-            CPU_LLVM: 1
+            env: CPU=1 CPU_LLVM=1
           - backend: cpu
-            CPU: 1
-            CPU_LLVM: 0
-            CPU_COUNT: 2
+            env: CPU=1 CPU_LLVM=0 CPU_COUNT=2
           - backend: opencl
-            CL: 1
+            env: CL=1
           - backend: lvp
-            CPU: 1
-            CPU_LVP: 1
+            env: CPU=1 CPU_LVP=1
 
     name: Linux (${{ matrix.backend }})
     runs-on: ubuntu-22.04
     timeout-minutes: 20
-    env:
-      CPU: ${{ matrix.CPU }}
-      CPU_LLVM: ${{ matrix.CPU_LLVM }}
-      CPU_COUNT: ${{ matrix.CPU_COUNT }}
-      CPU_LVP: ${{ matrix.CPU_LVP }}
-      CL: ${{ matrix.CL }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -783,12 +767,12 @@ jobs:
           mesa: ${{ matrix.backend == 'lvp' && 'true' }}
       - name: Check Device.DEFAULT and print some source
         run: |
-          python3 -c "from tinygrad import Device; assert Device.DEFAULT in ['CPU','CL'], Device.DEFAULT"
-          DEBUG=5 FORWARD_ONLY=1 python3 test/test_ops.py TestOps.test_add
+          ${{ matrix.env }} python3 -c "from tinygrad import Device; assert Device.DEFAULT in ['CPU','CL'], Device.DEFAULT"
+          ${{ matrix.env }} DEBUG=5 FORWARD_ONLY=1 python3 test/test_ops.py TestOps.test_add
       - name: Run pytest (${{ matrix.backend }})
-        run: python -m pytest -n=auto test/ --ignore=test/models --ignore=test/unit --durations=20
+        run: ${{ matrix.env }} python -m pytest -n=auto test/ --ignore=test/models --ignore=test/unit --durations=20
       - name: Run TRANSCENDENTAL math
-        run: TRANSCENDENTAL=2 python -m pytest -n=auto test/test_ops.py::TestOps::test_sin test/test_ops.py::TestOps::test_cos test/test_ops.py::TestOps::test_tan test/test_ops.py::TestOps::test_exp test/test_ops.py::TestOps::test_log --durations=20
+        run: ${{ matrix.env }} TRANSCENDENTAL=2 python -m pytest -n=auto test/test_ops.py::TestOps::test_sin test/test_ops.py::TestOps::test_cos test/test_ops.py::TestOps::test_tan test/test_ops.py::TestOps::test_exp test/test_ops.py::TestOps::test_log --durations=20
       - name: Run process replay tests
         uses: ./.github/actions/process-replay
 
@@ -895,26 +879,16 @@ jobs:
       matrix:
         include:
           - backend: metal
-            METAL: 1
+            env: METAL=1
           - backend: llvm
-            CPU: 1
-            CPU_LLVM: 1
+            env: CPU=1 CPU_LLVM=1
           - backend: cpu
-            CPU: 1
-            CPU_LLVM: 0
-            CPU_COUNT: 2
+            env: CPU=1 CPU_LLVM=0 CPU_COUNT=2
           - backend: lvp
-            CPU: 1
-            CPU_LVP: 1
+            env: CPU=1 CPU_LVP=1
     name: MacOS (${{ matrix.backend }})
     runs-on: macos-15
     timeout-minutes: 20
-    env:
-      CPU: ${{ matrix.CPU }}
-      CPU_LLVM: ${{ matrix.CPU_LLVM }}
-      CPU_COUNT: ${{ matrix.CPU_COUNT }}
-      CPU_LVP: ${{ matrix.CPU_LVP }}
-      METAL: ${{ matrix.METAL }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -928,15 +902,15 @@ jobs:
           mesa: ${{ matrix.backend == 'lvp' && 'true' }}
       - name: Check Device.DEFAULT and print some source
         run: |
-          python -c "from tinygrad import Device; assert Device.DEFAULT == {'LLVM':'CPU','LVP':'CPU'}.get(x:='${{ matrix.backend }}'.upper(), x), Device.DEFAULT"
-          DEBUG=4 python3 test/test_tiny.py TestTiny.test_plus
+          ${{ matrix.env }} python -c "from tinygrad import Device; assert Device.DEFAULT == {'LLVM':'CPU','LVP':'CPU'}.get(x:='${{ matrix.backend }}'.upper(), x), Device.DEFAULT"
+          ${{ matrix.env }} DEBUG=4 python3 test/test_tiny.py TestTiny.test_plus
       - name: Run pytest (${{ matrix.backend }})
-        run: python3 -m pytest -n=auto test/ --ignore=test/models --ignore=test/unit --durations=20
+        run: ${{ matrix.env }} python3 -m pytest -n=auto test/ --ignore=test/models --ignore=test/unit --durations=20
       - name: Run process replay tests
         uses: ./.github/actions/process-replay
       - name: Run macOS-specific unit test
         if: matrix.backend == 'cpu'
-        run: python3 -m pytest test/unit/test_disk_tensor.py::TestDiskTensor::test_copy_to_cpu_not_truncated
+        run: ${{ matrix.env }} python3 -m pytest test/unit/test_disk_tensor.py::TestDiskTensor::test_copy_to_cpu_not_truncated
 
 # ****** Windows Tests ******
 
@@ -946,23 +920,15 @@ jobs:
       matrix:
         include:
           - backend: llvm
-            CPU: 1
-            CPU_LLVM: 1
+            env: CPU=1 CPU_LLVM=1
           - backend: cpu
-            CPU: 1
-            CPU_LLVM: 0
-            CPU_COUNT: 2
+            env: CPU=1 CPU_LLVM=0 CPU_COUNT=2
           - backend: webgpu
-            WEBGPU: 1
+            env: WEBGPU=1
 
     name: Windows (${{ matrix.backend }})
     runs-on: windows-latest
     timeout-minutes: 15
-    env:
-      CPU: ${{ matrix.CPU }}
-      CPU_LLVM: ${{ matrix.CPU_LLVM }}
-      CPU_COUNT: ${{ matrix.CPU_COUNT }}
-      WEBGPU: ${{ matrix.WEBGPU }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -975,12 +941,12 @@ jobs:
       - name: Run unit tests
         if: matrix.backend=='llvm'
         # test_newton_schulz hits RecursionError
-        run: python -m pytest -n=auto test/unit/ --ignore=test/unit/test_disk_tensor.py --ignore=test/unit/test_elf.py --ignore=test/unit/test_tar.py --ignore=test/unit/test_linalg.py --durations=20
+        run: ${{ matrix.env }} python -m pytest -n=auto test/unit/ --ignore=test/unit/test_disk_tensor.py --ignore=test/unit/test_elf.py --ignore=test/unit/test_tar.py --ignore=test/unit/test_linalg.py --durations=20
       - name: Run pytest (${{ matrix.backend }})
         shell: bash
         run: |
-          python -c "from tinygrad import Device; assert Device.DEFAULT == {'LLVM':'CPU'}.get(x:='${{ matrix.backend }}'.upper(), x), Device.DEFAULT"
-          python -m pytest -n=auto test/test_tiny.py test/test_ops.py --durations=20
+          ${{ matrix.env }} python -c "from tinygrad import Device; assert Device.DEFAULT == {'LLVM':'CPU'}.get(x:='${{ matrix.backend }}'.upper(), x), Device.DEFAULT"
+          ${{ matrix.env }} python -m pytest -n=auto test/test_tiny.py test/test_ops.py --durations=20
 
 # ****** Compile-only Tests ******
 
@@ -990,16 +956,14 @@ jobs:
       matrix:
         include:
           - backend: ir3
-            NULL_IR3: 1
+            env: NULL_IR3=1
           - backend: nak
-            NULL_NAK: 1
+            env: NULL_NAK=1
     name: Compile-only (${{ matrix.backend }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       NULL: 1
-      NULL_IR3: ${{ matrix.NULL_IR3 }}
-      NULL_NAK: ${{ matrix.NULL_NAK }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -1013,6 +977,6 @@ jobs:
       - name: Run test_ops
         shell: bash
         run: |
-          python -c "from tinygrad import Device; assert Device.DEFAULT == 'NULL'"
-          DEBUG=4 python3 test/test_ops.py TestOps.test_add
-          python -m pytest -n=auto test/test_ops.py --durations=20
+          ${{ matrix.env }} python -c "from tinygrad import Device; assert Device.DEFAULT == 'NULL'"
+          ${{ matrix.env }} DEBUG=4 python3 test/test_ops.py TestOps.test_add
+          ${{ matrix.env }} python -m pytest -n=auto test/test_ops.py --durations=20
