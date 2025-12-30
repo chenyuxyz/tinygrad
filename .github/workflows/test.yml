@@ -553,6 +553,8 @@ jobs:
     name: Linux (DSP)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      MOCKDSP: 1
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -574,8 +576,6 @@ jobs:
         tags: qemu-hexagon:latest
         cache-from: type=gha
         cache-to: type=gha,mode=min
-    - name: Set MOCKDSP env
-      run: printf "MOCKDSP=1" >> $GITHUB_ENV
     - name: Run test_tiny on DSP
       run: DEBUG=2 DSP=1 python test/test_tiny.py
     - name: Test transcendentals
@@ -713,6 +713,10 @@ jobs:
     env:
       MOCKGPU: 1
       FORWARD_ONLY: 1
+      CUDA: ${{ matrix.backend == 'ptx' && '1' || '' }}
+      CUDA_PTX: ${{ matrix.backend == 'ptx' && '1' || '' }}
+      NV: ${{ matrix.backend == 'nv' && '1' || '' }}
+      SKIP_SLOW_TEST: ${{ matrix.backend == 'nv' && '1' || '' }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -723,8 +727,6 @@ jobs:
           deps: testing_minimal
           cuda: 'true'
           ocelot: 'true'
-      - name: Set env
-        run: printf "${{ matrix.backend == 'PTX' && 'CUDA=1\nCUDA_PTX=1' || matrix.backend == 'nv' && 'NV=1\nSKIP_SLOW_TEST=1' }}" >> $GITHUB_ENV
       - name: Check Device.DEFAULT and print some source
         run: |
           python3 -c "from tinygrad import Device; assert Device.DEFAULT in ['CUDA','NV'], Device.DEFAULT"
@@ -744,6 +746,12 @@ jobs:
     name: Linux (${{ matrix.backend }})
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    env:
+      CPU: ${{ matrix.backend != 'opencl' && '1' || '' }}
+      CPU_LLVM: ${{ matrix.backend == 'llvm' && '1' || matrix.backend == 'cpu' && '0' || '' }}
+      CPU_COUNT: ${{ matrix.backend == 'cpu' && '2' || '' }}
+      CPU_LVP: ${{ matrix.backend == 'lvp' && '1' || '' }}
+      CL: ${{ matrix.backend == 'opencl' && '1' || '' }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -755,8 +763,6 @@ jobs:
           opencl: ${{ matrix.backend == 'opencl' && 'true' }}
           llvm: ${{ matrix.backend == 'llvm' || matrix.backend == 'lvp' }}
           mesa: ${{ matrix.backend == 'lvp' && 'true' }}
-      - name: Set env
-        run: printf "${{ matrix.backend == 'llvm' && 'CPU=1\nCPU_LLVM=1' || matrix.backend == 'cpu' && 'CPU=1\nCPU_LLVM=0\nCPU_COUNT=2' || matrix.backend == 'opencl' && 'CL=1' || matrix.backend == 'lvp' && 'CPU=1\nCPU_LVP=1' }}" >> $GITHUB_ENV
       - name: Check Device.DEFAULT and print some source
         run: |
           python3 -c "from tinygrad import Device; assert Device.DEFAULT in ['CPU','CL'], Device.DEFAULT"
@@ -873,6 +879,12 @@ jobs:
     name: MacOS (${{ matrix.backend }})
     runs-on: macos-15
     timeout-minutes: 20
+    env:
+      CPU: ${{ matrix.backend != 'metal' && '1' || '' }}
+      CPU_LLVM: ${{ matrix.backend == 'llvm' && '1' || matrix.backend == 'cpu' && '0' || '' }}
+      CPU_COUNT: ${{ matrix.backend == 'cpu' && '2' || '' }}
+      CPU_LVP: ${{ matrix.backend == 'lvp' && '1' || '' }}
+      METAL: ${{ matrix.backend == 'metal' && '1' || '' }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -884,8 +896,6 @@ jobs:
           pydeps: "capstone"
           llvm: ${{ matrix.backend == 'llvm' || matrix.backend == 'lvp' }}
           mesa: ${{ matrix.backend == 'lvp' && 'true' }}
-      - name: Set env
-        run: printf "${{ matrix.backend == 'llvm' && 'CPU=1\nCPU_LLVM=1' || matrix.backend == 'cpu' && 'CPU=1\nCPU_LLVM=0\nCPU_COUNT=2' || matrix.backend == 'metal' && 'METAL=1' || matrix.backend == 'lvp' && 'CPU=1\nCPU_LVP=1' }}" >> $GITHUB_ENV
       - name: Check Device.DEFAULT and print some source
         run: |
           python -c "from tinygrad import Device; assert Device.DEFAULT == {'LLVM':'CPU','LVP':'CPU'}.get(x:='${{ matrix.backend }}'.upper(), x), Device.DEFAULT"
@@ -909,6 +919,11 @@ jobs:
     name: Windows (${{ matrix.backend }})
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      CPU: ${{ matrix.backend != 'webgpu' && '1' || '' }}
+      CPU_LLVM: ${{ matrix.backend == 'llvm' && '1' || matrix.backend == 'cpu' && '0' || '' }}
+      CPU_COUNT: ${{ matrix.backend == 'cpu' && '2' || '' }}
+      WEBGPU: ${{ matrix.backend == 'webgpu' && '1' || '' }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -918,9 +933,6 @@ jobs:
           key: windows-${{ matrix.backend }}-minimal
           deps: testing_unit
           pydeps: ${{ matrix.backend == 'webgpu' && 'dawn-python' || '' }}
-      - name: Set env
-        shell: bash
-        run:  printf "${{ matrix.backend == 'llvm' && 'CPU=1\nCPU_LLVM=1' || matrix.backend == 'cpu' && 'CPU=1\nCPU_LLVM=0\nCPU_COUNT=2' || matrix.backend == 'webgpu' && 'WEBGPU=1'}}" >> $GITHUB_ENV
       - name: Run unit tests
         if: matrix.backend=='llvm'
         # test_newton_schulz hits RecursionError
@@ -941,6 +953,10 @@ jobs:
     name: Compile-only (${{ matrix.backend }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      NULL: 1
+      NULL_IR3: ${{ matrix.backend == 'ir3' && '1' || '' }}
+      NULL_NAK: ${{ matrix.backend == 'nak' && '1' || '' }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -951,9 +967,6 @@ jobs:
           deps: testing_minimal
           mesa: ${{ (matrix.backend == 'ir3' || matrix.backend == 'nak') && 'true' }}
           python-version: '3.14'
-      - name: Set env
-        shell: bash
-        run: printf "NULL=1\n${{ matrix.backend == 'ir3' && 'NULL_IR3=1' || matrix.backend == 'nak' && 'NULL_NAK=1' }}" >> $GITHUB_ENV
       - name: Run test_ops
         shell: bash
         run: |
