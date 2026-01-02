@@ -300,7 +300,10 @@ class OpenCLRenderer(CStyleLanguage):
 
   string_rewrite = PatternMatcher([
     (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"as_{ctx.render_dtype(x.dtype)}(({ctx.render_dtype(x.src[0].dtype)})({ctx[x.src[0]]}))"),
-    # load/store image (OpenCL)
+    # load/store image (OpenCL) - when fallback is 0, use conditional index (OOB returns 0)
+    (UPat(Ops.LOAD, dtype=dtypes.float.vec(4), src=(UPat.var('buf').index(UPat.var('idx', dtypes.int.vec(2)), UPat.var("gate")),
+      UPat(Ops.VECTORIZE, src=UPat(Ops.CONST, arg=0)))),
+      lambda ctx,buf,idx,gate: f"read_imagef({ctx[buf]}, smp, ({ctx[gate]}?{ctx[idx]}:(int2)(-1,-1)))"),
     (UPat(Ops.LOAD, dtype=dtypes.float.vec(4), src=(UPat.var('buf').index(UPat.var('idx', dtypes.int.vec(2)), UPat.var("gate")), UPat.var("var"))),
       lambda ctx,buf,idx,var,gate: f"({ctx[gate]}?read_imagef({ctx[buf]}, smp, {ctx[idx]}):{ctx[var]})"),
     (UPat(Ops.LOAD, dtype=dtypes.float.vec(4), src=(UPat.var('buf').index(UPat.var('idx', dtypes.int.vec(2))),)),
