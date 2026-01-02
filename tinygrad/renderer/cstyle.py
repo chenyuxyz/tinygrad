@@ -157,7 +157,7 @@ class CStyleLanguage(Renderer):
     if dt.count > 1: return self.type_map.get(scalar:=dt.scalar(), scalar.name).replace(" ", "_") + str(dt.count)
     return self.type_map.get(scalar:=dt.scalar(), scalar.name)
 
-  def __getitem__(self, key): return self.r[key]  # hacky helper
+  def __getitem__(self, key): return self.r[key]  # provides ctx[uop] access for PatternMatcher callbacks
   def _render(self, uops:list[UOp]) -> tuple[str, list[str], list[tuple[str,tuple[DType,bool]]]]:
     r: dict[UOp, str] = {}
     self.r = r
