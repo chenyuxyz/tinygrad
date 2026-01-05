@@ -6,7 +6,7 @@ from typing import Callable, ClassVar, Sequence, cast, get_args, Literal, Suppor
 if TYPE_CHECKING: import numpy
 from tinygrad.dtype import DType, DTypeLike, dtypes, ImageDType, ConstType, least_upper_float, least_upper_dtype, sum_acc_dtype, to_dtype, truncate
 from tinygrad.dtype import _from_np_dtype, _to_np_dtype
-from tinygrad.helpers import argfix, make_tuple, flatten, prod, all_int, round_up, merge_dicts, argsort, getenv, all_same, fully_flatten
+from tinygrad.helpers import argfix, make_tuple, flatten, prod, all_int, round_up, argsort, getenv, all_same, fully_flatten
 from tinygrad.helpers import IMAGE, WINO, Metadata, TRACEMETA, ceildiv, fetch, polyN, is_numpy_ndarray, TracingKey, cpu_profile
 from tinygrad.helpers import suppress_finalizing, disable_gc
 from tinygrad.gradient import compute_gradient
@@ -2062,37 +2062,46 @@ class Tensor(OpMixin):
     print(Tensor.einsum("ij,ij->", x, y).numpy())
     ```
     """
-    def parse_formula(formula:str, *operands:Tensor):
-      if "..." in (formula := formula.replace(" ", "")):
-        ell_chars, ell_longest = "".join(c for c in string.ascii_letters if c not in formula), 0
-        for i, inp in enumerate(filter(lambda x: "..." in x, inputs := formula.split("->")[0].split(","))):
-          if (ell_count := max(operands[i].ndim, 1) - (len(inp) - len("..."))) > ell_longest: ell_longest = ell_count
-          inputs[i] = inp.replace("...", ell_chars[-ell_count:])
-        inputs_str, out_ellipse = ",".join(inputs), ell_chars[-ell_longest:]
-        return (inputs_str, formula.split("->")[1].replace("...", out_ellipse)) if "->" in formula else \
-          (inputs_str, out_ellipse + ''.join(sorted(c for c in inputs_str if inputs_str.count(c) == 1 and c.isalpha() and c not in out_ellipse)))
-      return formula.split("->") if "->" in formula else (formula, ''.join(c for c in sorted(formula) if formula.count(c) == 1 and c.isalpha()))
+    xs = list(argfix(*operands))
+    formula = formula.replace(" ", "")
 
-    xs:tuple[Tensor, ...] = argfix(*operands)
-    inputs_str, output = parse_formula(formula, *xs)
-    inputs = inputs_str.split(",")
-    if len(xs)!=len(inputs): raise ValueError(f"number of inputs doesn't match number of operands in formula, expected {len(inputs)}, got {len(xs)}")
+    # expand ellipsis to individual letters
+    if "..." in formula:
+      free, lhs_rhs, ell_n = "".join(c for c in string.ascii_letters if c not in formula), formula.split("->"), 0
+      for i, (s, x) in enumerate(zip(inputs := lhs_rhs[0].split(","), xs)):
+        if "..." in s: ell_n = max(ell_n, x.ndim - len(s) + 3)
+      for i, (s, x) in enumerate(zip(inputs, xs)):
+        if "..." in s: inputs[i] = s.replace("...", free[ell_n - (x.ndim - len(s) + 3):ell_n])
+      lhs = ",".join(inputs)
+      rhs = lhs_rhs[1].replace("...", free[:ell_n]) if len(lhs_rhs) > 1 else \
+            free[:ell_n] + "".join(sorted(c for c in lhs if lhs.count(c) == 1 and c.isalpha() and c not in free[:ell_n]))
+      formula = lhs + "->" + rhs
 
-    # map the value of each letter in the formula
-    letter_val = sorted(merge_dicts([dict(zip(letters, tensor.shape)) for letters, tensor in zip(inputs, xs)]).items())
+    lhs, rhs = formula.split("->") if "->" in formula else (formula, "".join(sorted(c for c in formula if formula.count(c)==1 and c.isalpha())))
+    inputs = lhs.split(",")
+    if len(xs) != len(inputs): raise ValueError(f"number of operands doesn't match formula, expected {len(inputs)}, got {len(xs)}")
 
-    xs_:list[Tensor] = []
-    lhs = [sorted(enumerate(s), key=lambda e:e[1]) for s in inputs]
-    for x,(order,letters) in zip(xs, [list(zip(*l)) for l in lhs]):
-      # permute to the sorted letter order, then reshape/expand to create dimensions for the missing letters
-      xs_.append(x.permute(order).reshape([val if letter in letters else 1 for letter,val in letter_val]).expand([val for _,val in letter_val]))
+    # diagonal: repeated letter in single input means take diagonal
+    for i, (s, x) in enumerate(zip(inputs, xs)):
+      for c in set(s):
+        while s.count(c) > 1:
+          j, k, n = s.index(c), s.index(c, s.index(c) + 1), cast(int, x.shape[s.index(c)])
+          perm = [d for d in range(x.ndim) if d not in (j, k)] + [j, k]
+          x = x.permute(perm).flatten(-2).pad(((0,0),)*(x.ndim-2)+((0,n),)).unflatten(-1, (n, n+1))[..., 0] if x.ndim > 2 else x.diagonal()
+          s = s[:k] + s[k+1:]
+      inputs[i], xs[i] = s, x
 
-    # ordinal encode the output alphabet
-    rhs_order = argsort(argsort(list(output)))
-
-    # sum over all axes that's not in the output, then permute to the output order
-    return functools.reduce(lambda a,b:a*b, xs_) \
-      .sum(axis=[axis for axis,(letter,_) in enumerate(letter_val) if letter not in output], dtype=dtype).permute(rhs_order)
+    # align all tensors to sorted alphabet, multiply, sum non-output dims, permute to output order
+    sizes:dict[str, int] = {}
+    for s, x in zip(inputs, xs):
+      for c, sz in zip(s, x.shape):
+        if c in sizes and sizes[c] != sz: raise RuntimeError(f"dimension mismatch for '{c}': {sizes[c]} vs {sz}")
+        sizes[c] = sz
+    alpha = sorted(sizes)
+    xs = [x.permute(sorted(range(len(s)), key=lambda j:s[j])).reshape([sizes[c] if c in s else 1 for c in alpha]).expand([sizes[c] for c in alpha])
+          for s, x in zip(inputs, xs)]
+    return functools.reduce(lambda a,b: a*b, xs).sum(axis=[i for i, c in enumerate(alpha) if c not in rhs], dtype=dtype) \
+      .permute([sorted(c for c in alpha if c in rhs).index(c) for c in rhs])
 
   # ***** processing ops *****
 
