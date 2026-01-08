@@ -575,12 +575,16 @@ def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
   assign_rep: dict[UOp, UOp] = {}
   for u in tsink.toposort():
     if u.op is not Ops.AFTER: continue
+    # check if this buffer was previously assigned and this kernel reads from it (cycle: need old value but it's been modified)
+    if (prev := kernel_assign.get(u.buf_uop)) is not None and u.buf_uop in u.src[1].src and prev.src[1] is not u.src[1]:
+      raise RuntimeError(f"cycle detected in graph, kernel for {u.buf_uop} must either depend on AFTER or BUFFER")
     kernel_assign[u.buf_uop] = u
     for s in u.src[1].src:
       # TODO: this is probably broken for MSELECT/MSTACK
       if s.op is not Ops.BUFFER or s is u.buf_uop or (a:=kernel_assign.get(s)) is None: continue
       # check for cross-dependency cycle: kernel A writes to s and reads from u.buf_uop, kernel B writes to u.buf_uop and reads from s
-      if u.buf_uop in a.src[1].src:
+      # but skip if same kernel (multi-output kernel)
+      if u.buf_uop in a.src[1].src and a.src[1] is not u.src[1]:
         raise RuntimeError(f"cycle detected in graph, kernel for {u.buf_uop} must either depend on AFTER or BUFFER")
       assign_rep[a] = kernel_assign[s] = a.replace(src=a.src+(u,))
   if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, name="fix_assign")
