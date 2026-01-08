@@ -579,7 +579,12 @@ def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
     for s in u.src[1].src:
       # TODO: this is probably broken for MSELECT/MSTACK
       if s.op is not Ops.BUFFER or s is u.buf_uop or (a:=kernel_assign.get(s)) is None: continue
-      if any(x.op is Ops.AFTER and x.buf_uop is s for x in u.toposort()):
+      # check for cycles:
+      # 1. u depends on an AFTER for s (original check - catches diamond)
+      # 2. a's kernel reads from u's output buffer (cross-dependency check - catches crossunder)
+      toposort_cycle = any(x.op is Ops.AFTER and x.buf_uop is s for x in u.toposort())
+      cross_cycle = u.buf_uop in a.src[1].src and a.src[1] is not u.src[1]
+      if toposort_cycle or cross_cycle:
         raise RuntimeError(f"cycle detected in graph, kernel for {u.buf_uop} must either depend on AFTER or BUFFER")
       assign_rep[a] = kernel_assign[s] = a.replace(src=a.src+(u,))
   if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, name="fix_assign")
