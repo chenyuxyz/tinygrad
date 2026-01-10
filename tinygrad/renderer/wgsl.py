@@ -4,7 +4,6 @@ from tinygrad.renderer.cstyle import CStyleLanguage, base_rewrite, extra_pm
 from tinygrad.helpers import strip_parens
 
 def _mask(dt:DType): return 0xFF if dt.itemsize == 1 else 0xFFFF
-def _elems_for_pack(dt:DType): return 4//dt.itemsize
 
 def sign_extend(val:UOp, sext_am:int):
   return (UOp.where((val >> (sext_am - 1)) > 0, UOp.const(dtypes.uint32, 0xffffffff) << sext_am, UOp.const(dtypes.uint32, 0)) \
@@ -12,10 +11,9 @@ def sign_extend(val:UOp, sext_am:int):
 
 # store for char: buf[idx/4] <- (var << (idx%4)*8))
 def packed_store(bidx:UOp, var:UOp):
-  elems, mask = _elems_for_pack(var.dtype), _mask(var.dtype)
+  elems, mask = 4//var.dtype.itemsize, _mask(var.dtype)
   shift_am = (bidx.src[1].cast(dtypes.uint32) % UOp.const(dtypes.uint32, elems)) * UOp.const(dtypes.uint32, 8*var.dtype.itemsize)
-  new_v = (var & mask).cast(dtypes.uint32) << shift_am
-  wmask = ((mask << shift_am) ^ 0xFFFFFFFF).cast(dtypes.uint32)
+  new_v, wmask = (var & mask).cast(dtypes.uint32) << shift_am, ((mask << shift_am) ^ 0xFFFFFFFF).cast(dtypes.uint32)
   div_idx = bidx.src[1] // elems
   # preserve valid condition (bidx.src[2]) if it exists for gated stores
   idx_src = (bidx.src[0], div_idx) if len(bidx.src) == 2 else (bidx.src[0], div_idx, bidx.src[2])
@@ -24,8 +22,7 @@ def packed_store(bidx:UOp, var:UOp):
 
 # load for char: sign_extend(buf[idx/4] >> ((idx%4)*8))
 def packed_load(root:UOp, bidx:UOp, dtype:DType, var:UOp|None=None):
-  elems, mask = _elems_for_pack(dtype), _mask(dtype)
-  div_idx = bidx.src[1] // elems
+  mask, div_idx = _mask(dtype), bidx.src[1] // (elems := 4//dtype.itemsize)
   shift_am = (bidx.src[1].cast(dtypes.uint32) % UOp.const(dtypes.uint32, elems)) * UOp.const(dtypes.uint32, 8*dtype.itemsize)
   if var is not None: load = UOp.load(UOp(Ops.INDEX, bidx.dtype, (bidx.src[0], div_idx, bidx.src[2])), var, dtype=dtypes.uint32, arg=root.arg)
   else: load = UOp.load(UOp(Ops.INDEX, bidx.dtype, (bidx.src[0], div_idx)), *root.src[1:], dtype=dtypes.uint32, arg=root.arg)
@@ -35,7 +32,7 @@ def packed_load(root:UOp, bidx:UOp, dtype:DType, var:UOp|None=None):
 def is_packed(dt:DType, odt:DType|None = None) -> bool:
   if odt is None: odt = dt
   return dt.itemsize < 4 and dt.base != dtypes.half and (not isinstance(odt, PtrDType) or odt.addrspace != AddrSpace.REG)
-def _packed_size(dt:PtrDType): return dt.size // _elems_for_pack(dt) if is_packed(dt) else dt.size
+def _packed_size(dt:PtrDType): return dt.size // (4//dt.itemsize) if is_packed(dt) else dt.size
 
 wgsl_matcher = PatternMatcher([
   (UPat((Ops.CMPLT, Ops.XOR), src=(UPat(name="a", dtype=dtypes.bool), UPat.var("b")), name="c"),
