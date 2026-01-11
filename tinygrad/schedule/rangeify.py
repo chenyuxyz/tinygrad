@@ -324,7 +324,7 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
       mops.append((walk.op, walk.marg))
       walk = walk.src[0]
     for m in mops[::-1]: ret = ret._mop(*m)
-    return ret
+    return ret.rtag(x.tag)
 
   # lower outerworld reduce here
   if x.src[0].op is Ops.REDUCE and len(x.src[0].src) == 2 and x.src[0].src[1].arg[-1] == AxisType.OUTER:
@@ -336,26 +336,26 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
     buf = buf.after(buf.index(zero_range).store(0).end(zero_range))
     bufi = buf.index(idx, dtype=sdtype)
     do_store = bufi.store(bufi.load() + x.src[0].src[0], tag=x.tag).end(*rngs).end(outer_range)
-    return buf.after(do_store)
+    return buf.after(do_store).rtag(x.tag)
 
   # NOTE: the DEFINE_LOCAL needs to be disambiguated here
   if sdtype.addrspace == AddrSpace.GLOBAL:
     buf = UOp(Ops.BUFFER, x.dtype, (UOp(Ops.LUNIQUE, arg=next(ctx)), UOp(Ops.DEVICE, arg=x.arg.device)), size)
     do_store = buf.index(idx, dtype=sdtype).store(x.src[0], tag=x.tag).end(*rngs)
-    return buf.after(do_store)
+    return buf.after(do_store).rtag(x.tag)
 
   if allow_locals:
     # handle locals
     buf = UOp(Ops.DEFINE_LOCAL, sdtype, arg=next(ctx))
     do_store = buf.broadcast(x.src[1].dtype.count).index(idx, dtype=sdtype).store(x.src[0]).end(*rngs)
-    return buf.after(do_store.barrier())
+    return buf.after(do_store.barrier()).rtag(x.tag)
 
-# collapse any BUFFERIZE to single input BUFFERIZE. move the tag to a reshape
+# collapse any BUFFERIZE to single input BUFFERIZE
 def flatten_bufferize(x:UOp):
   if x.tag is None and len(x.src) == 2: return None
   ret = x.replace(tag=None, src=(x.src[0], get_single_element(apply_movement_op(Ops.RESHAPE, (prod(x.shape),), x.shape, x.src[1:]))))
   rngs = x.src[1:]
-  ret = ret.forced_reshape(x.shape)
+  ret = ret.reshape(x.shape)
   if any(r.op is Ops.RANGE and r.src[0].op is not Ops.CONST for r in rngs):
     sym_shape = tuple([r.src[0] if r.op is not Ops.CONST else 1 for r in rngs])
     ret = ret.shrink(tuple([(0,x) for x in sym_shape]))
