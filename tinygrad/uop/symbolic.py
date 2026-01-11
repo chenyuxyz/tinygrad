@@ -31,8 +31,8 @@ propagate_invalid = PatternMatcher([
   (invalid_gate.cast(name="cast"), lambda i,x,cond,cast: x.cast(cast.dtype)),
   *((invalid_gate.alu(op, UPat.var("y")).named("alu"), lambda cond,x,y,alu,i: cond.where(x.alu(alu.op,y), i))
     for op in GroupOp.Binary-GroupOp.Comparison),
-  # TODO: when can this happen? and is it always safe to just drop invalid?
-  *((invalid_gate.alu(op, UPat.var("y")).named("alu"), lambda cond,x,y,alu,i: x.alu(alu.op,y)) for op in GroupOp.Comparison),
+  # # TODO: when can this happen? and is it always safe to just drop invalid?
+  # *((invalid_gate.alu(op, UPat.var("y")).named("alu"), lambda cond,x,y,alu,i: x.alu(alu.op,y)) for op in GroupOp.Comparison),
   # alu with invalid -> invalid
   *((invalid_pat.alu(op, UPat(dtype=dtypes.index)), lambda i: i) for op in GroupOp.Binary-GroupOp.Comparison),
 ])
