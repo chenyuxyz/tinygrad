@@ -149,6 +149,33 @@ class TestSymbolic(unittest.TestCase):
   def test_xor_0(self):
     self.helper_test_variable(Variable("a", 0, 8, dtypes.int) ^ 0, 0, 8, "a", test_z3=False)
 
+  def test_xor_self(self):
+    a = Variable("a", 0, 8, dtypes.int)
+    self.helper_test_variable(a ^ a, 0, 0, "0", test_z3=False)
+
+  def test_and_0(self):
+    a = Variable("a", 0, 8, dtypes.int)
+    self.helper_test_variable(a & 0, 0, 0, "0", test_z3=False)
+
+  def test_or_0(self):
+    a = Variable("a", 0, 8, dtypes.int)
+    self.helper_test_variable(a | 0, 0, 8, "a", test_z3=False)
+
+  def test_shift_by_0(self):
+    a = Variable("a", 0, 8, dtypes.int)
+    self.helper_test_variable(a << 0, 0, 8, "a", test_z3=False)
+    self.helper_test_variable(a >> 0, 0, 8, "a", test_z3=False)
+
+  def test_shift_of_0(self):
+    a = Variable("a", 0, 8, dtypes.int)
+    b = Variable("b", 0, 3, dtypes.int)
+    self.helper_test_variable(a.const_like(0) << b, 0, 0, "0", test_z3=False)
+    self.helper_test_variable(a.const_like(0) >> b, 0, 0, "0", test_z3=False)
+
+  def test_eq_self(self):
+    a = Variable("a", 0, 8, dtypes.int)
+    self.helper_test_variable(a.eq(a), True, True, "True", test_z3=False)
+
   def test_add_1(self):
     self.helper_test_variable(Variable("a", 0, 8)+1, 1, 9, "(a+1)")
 
