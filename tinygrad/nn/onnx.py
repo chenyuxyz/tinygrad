@@ -4,7 +4,7 @@ import dataclasses, functools, io, math, types, warnings, pathlib, sys, os, stru
 from io import BufferedReader
 from tinygrad.nn.state import TensorIO
 from tinygrad.tensor import Tensor, _broadcast_shape, ReductionStr
-from tinygrad.helpers import getenv, DEBUG, all_same, prod, flatten, make_tuple, argsort, is_numpy_ndarray, get_single_element, polyN
+from tinygrad.helpers import getenv, DEBUG, all_same, prod, flatten, fully_flatten, make_tuple, argsort, is_numpy_ndarray, get_single_element, polyN
 from tinygrad.dtype import DType, ConstType, dtypes, _from_np_dtype, truncate, least_upper_dtype
 from tinygrad.device import is_dtype_supported, Device
 
@@ -360,7 +360,7 @@ class OnnxPBParser:
 required_input_python_consts: dict[str, tuple[int, ...]] = {
   "Tile": (1,), "Range": (0,1,2), "Expand": (1,), "Reshape": (1,), "Squeeze": (1,), "Unsqueeze": (1,), "Trilu": (1,), "ConstantOfShape": (0,),
   "CumSum": (1,), "TopK": (1,), "Pad": (1,2,3), "MaxUnpool": (2,), "Dropout": (1,2), "CenterCropPad": (1,), "OneHot": (1,), "Compress": (1,),
-  "ImageDecoder": (0,), "AffineGrid": (1,), "Resize": (1,2,3), "Upsample": (1,), "Split": (1,), "Slice": (1,2,3,4),
+  "ImageDecoder": (0,), "AffineGrid": (1,), "Resize": (1,2,3), "Upsample": (1,), "Split": (1,), "Slice": (1,2,3,4), "Gather": (1,),
   "HannWindow": (0,), "HammingWindow": (0,), "BlackmanWindow": (0,),
   **{"Reduce"+r: (1,) for r in ("Max", "Min", "Sum", "Mean", "SumSquare", "Prod", "L1", "L2", "LogSum", "LogSumExp")},
   **{optim: (1,) for optim in ("Adam", "Adagrad", "Momentum")}
@@ -1142,16 +1142,16 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
 
   def ArrayFeatureExtractor(x:Tensor, indices:Tensor): return x[..., indices]
 
-  def Gather(x:Tensor, indices:Tensor, axis:int=0):
-    if indices.numel() < 9: # NOTE lessor kernels for smaller indices but kernel number increases depending on size of indices
-      ret_shape = x.shape[:axis] + indices.shape + x.shape[axis+1:]
-      if indices.ndim > 1: indices = indices.flatten()
-      index_consts = [_cached_to_python_const(indices)] if indices.shape == () else _cached_to_python_const(indices)
-      index_consts = [x.shape[axis]+i if i<0 else i for i in index_consts]
+  def Gather(x:Tensor, indices:list|int, axis:int=0):
+    if len(flat := fully_flatten(indices)) < 9:  # NOTE lessor kernels for smaller indices but kernel number increases depending on size of indices
+      # indices is a python const (from required_input_python_consts): int for scalar, list for 1D+
+      def _list_shape(x) -> tuple[int, ...]: return () if not isinstance(x, list) else (len(x),) + _list_shape(x[0]) if x else (0,)
+      ret_shape = x.shape[:axis] + _list_shape(indices) + x.shape[axis+1:]
+      index_consts = [x.shape[axis]+i if i<0 else i for i in flat]
       args = [[(0,x) if j != axis else (i,i+1) for j, x in enumerate(x.shape)] for i in index_consts]
       return x.shrink(arg=tuple(args[0])).cat(*[x.shrink(arg=tuple(arg)) for arg in args[1:]], dim=axis).reshape(ret_shape)
     # NOTE faster gather, fixed number of kernels, but exceeds limited kernels for openpilot
-    return x[tuple([slice(None) if i != axis else indices for i in range(x.ndim)])]
+    return x[tuple([slice(None) if i != axis else Tensor(indices) for i in range(x.ndim)])]
   def Scatter(*args, **kwargs): return ScatterElements(*args, **kwargs) # deprecated
 
   def GatherND(x:Tensor, indices:Tensor, batch_dims:int=0):

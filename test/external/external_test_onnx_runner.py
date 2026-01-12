@@ -85,6 +85,21 @@ class TestOnnxRunner(unittest.TestCase):
       output = runner({'inp': Tensor([1])})['output']
       np.testing.assert_equal(output.numpy(), weights + 1)
 
+  def test_gather_jit(self):
+    from tinygrad import TinyJit
+    # small indices (<9) use shrink optimization, large indices use tensor indexing
+    for num_indices in [3, 15]:
+      indices = list(range(num_indices))
+      runner = build_onnx(
+          nodes=[onnx.helper.make_node('Gather', ['x', 'indices'], ['output'], axis=0)],
+          inputs=[onnx.helper.make_tensor_value_info('x', onnx.TensorProto.FLOAT, (20, 4))],
+          outputs=[onnx.helper.make_tensor_value_info('output', onnx.TensorProto.FLOAT, (num_indices, 4))],
+          initializers=[onnx.helper.make_tensor('indices', onnx.TensorProto.INT64, (num_indices,), indices)])
+      run = TinyJit(lambda x: runner({'x': x})['output'])
+      for _ in range(3):
+        x = Tensor.randn(20, 4).realize()
+        np.testing.assert_allclose(run(x).numpy(), x.numpy()[indices], atol=1e-5)
+
 all_dtypes = list(OnnxDataType)
 device_supported_dtypes = {odt for odt in OnnxDataType if is_dtype_supported(odt.to_dtype())}
 
