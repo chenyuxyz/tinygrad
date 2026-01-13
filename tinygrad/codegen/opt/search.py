@@ -36,7 +36,7 @@ def get_test_global_size(global_size, max_global_size, var_vals):
   return test_global_size, input_size / prod(test_global_size)
 
 def _time_program(p:ProgramSpec, lib:bytes, var_vals:dict[str, int], rawbufs:list[Buffer], early_stop:float|None=None,
-                  allow_test_size:int=True, max_global_size:int|None=65536, clear_l2=False, cnt=3, name="test") -> list[float]:
+                  allow_test_size:int=True, max_global_size:int|None=65536, clear_l2=False, cnt=3) -> list[float]:
   factor = 1
   if allow_test_size and max_global_size is not None:
     global_size, factor = get_test_global_size(p.global_size, max_global_size, var_vals)
@@ -66,7 +66,7 @@ def _try_compile(x:tuple[int,Scheduler], compiler:Compiler) -> tuple[int, tuple[
     signal.alarm(getenv("BEAM_TIMEOUT_SEC", 10))
   ret = None
   try:
-    p = get_program(x[1].copy().get_optimized_ast(name_override="test"), x[1].ren)
+    p = get_program(x[1].copy().get_optimized_ast(name_override="beam"), x[1].ren)
     assert p.uops is not None, "uop list wasn't generated?"
     if len(p.uops) >= (uops_max:=getenv("BEAM_UOPS_MAX", 3000)) > 0:
       if getenv("BEAM_LOG_SURPASS_MAX"): print(f"too many uops. {len(p.uops)=}, {uops_max=}")

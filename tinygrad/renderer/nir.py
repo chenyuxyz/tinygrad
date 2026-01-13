@@ -181,13 +181,13 @@ class NIRRenderer(Renderer):
     for u in [u for u in uops if u.op is Ops.SPECIAL and u.arg[0] == "l"]: self.b.shader.contents.info.workgroup_size[int(u.arg[-1])] = u.src[0].arg
     self.r: dict[UOp, Any] = {}
     self.param_idx, ranges = 0, []
+    assert uops[-1].op is Ops.SINK and uops[-1].arg is not None, "SINK with KernelInfo required"
+    self.b.shader.contents.info.name = charptr(uops[-1].arg.function_name.encode())
 
     for u in uops:
-      if u.op in {Ops.NOOP, Ops.GROUP, Ops.INDEX}: pass
+      if u.op in {Ops.NOOP, Ops.GROUP, Ops.INDEX, Ops.SINK}: pass
       elif u.op is Ops.AFTER:
         self.r[u] = self.r[u.src[0]]
-      elif u.op == Ops.SINK:
-        if u.arg is not None: self.b.shader.contents.info.name = charptr(u.arg.function_name.encode())
       elif u.op == Ops.DEFINE_LOCAL:
         self.r[u] = nimm(self.b, self.b.shader.contents.info.shared_size, dtypes.long)
         self.b.shader.contents.info.shared_size += u.dtype.nbytes()

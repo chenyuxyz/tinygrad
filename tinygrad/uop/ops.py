@@ -823,13 +823,15 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
 
 @dataclass(frozen=True)
 class KernelInfo:
-  name: str = "test"            # name of the kernel
+  name: str|None = None         # name of the kernel (None means auto-generate)
   axis_types: tuple[AxisType, ...] = tuple()
   dont_use_locals: bool = False # don't use local indexing
   applied_opts: tuple = tuple()
   opts_to_apply: tuple|None = None
   @property
-  def function_name(self): return to_function_name(self.name)
+  def function_name(self):
+    assert self.name is not None, "KernelInfo.name must be set before accessing function_name"
+    return to_function_name(self.name)
 
 @dataclass(frozen=True)
 class CustomKernel:

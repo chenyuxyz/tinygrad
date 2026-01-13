@@ -185,14 +185,12 @@ class PTXRenderer(Renderer):
       c[prefix] += 1
       return f"%{prefix}{c[prefix]-1}"
 
-    name = "test"
+    assert uops[-1].op is Ops.SINK and uops[-1].arg is not None, "SINK with KernelInfo required"
+    name = uops[-1].arg.function_name
     for u in uops:
-      if u.op in {Ops.NOOP, Ops.GROUP}: continue
+      if u.op in {Ops.NOOP, Ops.GROUP, Ops.SINK}: continue
       if u.op is Ops.AFTER:
         self.r[u] = self.r[u.src[0]]
-        continue
-      if u.op is Ops.SINK:
-        if u.arg is not None: name = u.arg.function_name
         continue
       if u.op is Ops.VECTORIZE:
         r[u] = [cast(str,r[x]) for x in u.src]

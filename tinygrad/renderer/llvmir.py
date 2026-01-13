@@ -164,14 +164,12 @@ class LLVMRenderer(Renderer):
           kernel += [f"  {r[u]}_amx{i} = alloca {ldt(dtype)}, align {dtype.itemsize}",
                      f"  {r[u]}_ptr_amx{i} = ptrtoint {ldt(dtype.ptr())} {r[u]}_amx{i} to i64"]
 
-    name = "test"
+    assert uops[-1].op is Ops.SINK and uops[-1].arg is not None, "SINK with KernelInfo required"
+    name = uops[-1].arg.function_name
     for u in uops:
-      if u.op in {Ops.NOOP, Ops.GROUP}: continue
+      if u.op in {Ops.NOOP, Ops.GROUP, Ops.SINK}: continue
       if u.op is Ops.AFTER:
         r[u] = r[u.src[0]]
-        continue
-      if u.op is Ops.SINK:
-        if u.arg is not None: name = u.arg.function_name
         continue
       if u.op in (Ops.DEFINE_GLOBAL, Ops.DEFINE_VAR):
         r[u] = f"%data{u.arg}" if u.op is Ops.DEFINE_GLOBAL else f"%{u.arg[0]}"
