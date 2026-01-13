@@ -87,7 +87,7 @@ def full_rewrite_to_sink(sink:UOp, ren:Renderer|None=None, optimize:bool=True) -
   sink = graph_rewrite(sink, pm_devectorize, ctx=ren, name="devectorize")
 
   # lower the index dtype to a concrete int
-  sink = graph_rewrite(sink, pm_lower_index_dtype+load_store_indexing, ctx=ren.device, name="lower all index dtypes")
+  sink = graph_rewrite(sink, pm_lower_index_dtype, ctx=ren.device, name="lower all index dtypes")
   sink = graph_rewrite(sink, symbolic, name="post index symbolic")
 
   # optional pre matcher
