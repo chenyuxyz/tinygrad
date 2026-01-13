@@ -381,11 +381,6 @@ def copy_(self, src, non_blocking=False):
   _copy_between_devices(src, self, cast_dtype, to_device, non_blocking)
   return self
 
-@torch.library.impl("aten::cat.out", "privateuseone")
-def cat_out(tensors, dim=0, out=None):
-  _apply_inplace(unwrap(out), Tensor.cat(*[unwrap(x) for x in tensors], dim=dim))
-  return out
-
 @torch.library.impl("aten::topk.values", "privateuseone")
 def topk_values(input, k, dim=None, largest=True, sorted=True, values=None, indices=None):
   out_values, out_indices = unwrap(input).topk(k, dim if dim is not None else -1, largest, sorted)
@@ -455,18 +450,74 @@ decomps = [
   aten.leaky_relu_backward,
   aten.nll_loss2d_forward,
   aten.unfold_backward,
-  # NOTE: many of these don't work or cause infinite loops
-  #aten.var_mean,
-  #aten.var,
-  #aten.rsqrt,
-  #aten.max_pool2d_with_indices,
-  # NOTE: these are prims
-  #aten.digamma,
-  #aten.erfinv,
-  #aten.lgamma,
-  # this needs copy_strided
-  #aten.lerp,
   aten.norm,
+  # prims-based decompositions (prims now implemented)
+  aten.abs,
+  aten.neg,
+  aten.reciprocal,
+  aten.sqrt,
+  aten.rsqrt,
+  aten.exp,
+  aten.exp2,
+  aten.expm1,
+  aten.log,
+  aten.log2,
+  aten.log10,
+  aten.log1p,
+  aten.sin,
+  aten.cos,
+  aten.tan,
+  aten.sinh,
+  aten.cosh,
+  aten.tanh,
+  aten.asin,
+  aten.acos,
+  aten.atan,
+  aten.asinh,
+  aten.acosh,
+  aten.atanh,
+  aten.ceil,
+  aten.floor,
+  #aten.round,  # conflicts with round.decimals_out special handling
+  aten.trunc,
+  aten.sign,
+  aten.erf,
+  aten.bitwise_not,
+  aten.add,
+  aten.sub,
+  aten.mul,
+  aten.div,
+  aten.maximum,
+  aten.minimum,
+  aten.pow,
+  aten.remainder,
+  aten.fmod,
+  aten.bitwise_and,
+  aten.bitwise_or,
+  aten.bitwise_xor,
+  aten.eq,
+  aten.ne,
+  aten.lt,
+  aten.le,
+  aten.gt,
+  aten.ge,
+  aten.prod,
+  aten.sum,
+  aten.amax,
+  aten.amin,
+  aten.var,
+  aten.var_mean,
+  aten.where,
+  aten.cat,
+  aten.flip,
+  aten.fmax,
+  aten.fmin,
+  # NOTE: no decomposition exists for these
+  #aten.max_pool2d_with_indices,
+  #aten.digamma,   # -> prims.digamma (not implemented)
+  #aten.erfinv,    # -> prims.erf_inv (not implemented)
+  #aten.lgamma,    # -> prims.lgamma (not implemented)
+  #aten.lerp,      # -> prims.copy_strided (not implemented)
 ]
 for k,v in get_decompositions(decomps).items():
   key = str(k._schema).split("(")[0]
@@ -477,68 +528,28 @@ for k,v in get_decompositions(decomps).items():
 # TODO: due to issue with empty / is_realized, it is slow to use assign so we use replace
 # the goal is to make as much as we can this
 simple_tensor_methods = [
-  # unary (ish)
-  "log", "log2", "log10", "sqrt", "rsqrt", "sign", "silu", "hardsigmoid", "exp", "exp2", "neg", "reciprocal", "bitwise_not",
-  "sigmoid", "clamp", "mish", "erf", "leaky_relu",
-  # trig
-  "acos", "acosh", "cos", "cosh", "asin", "asinh", "sin", "sinh", "atan", "atanh", "tan", "tanh",
-  # rounding
-  "ceil", "round", "floor", "trunc",
-  # binary
-  "mul", "div", "maximum", "minimum", "copysign",
-  # modify
-  "tril", "triu",
-  # reduce
-  "all", "any", "argmax", "argmin", "cumsum", "cumprod",
-  # complex
-  "avg_pool2d", "linspace"]
+  # NOTE: most unary/binary/trig ops now use decompositions via prims
+  # only keep ops without decompositions or with aten-only decomps
+  "silu", "hardsigmoid", "sigmoid", "clamp", "mish", "leaky_relu",  # activations (aten-only decomps or no decomp)
+  "round",  # need direct impl for round.decimals_out special handling
+  "copysign",  # no prims decomp
+  "tril", "triu",  # no decomp
+  "all", "any", "argmax", "argmin", "cumsum", "cumprod",  # reductions without prims decomp
+  "avg_pool2d", "linspace"]  # complex ops
 
 tiny_backend_out = {**{f"aten.{x}.out":getattr(Tensor,x) for x in simple_tensor_methods}, **{
-  "aten.add.out": lambda input,other,alpha=1: input+alpha*other,
-  "aten.sub.out": lambda input,other,alpha=1: input-alpha*other, # NOTE: this is also needed to handle reverse
-  "aten.div.out_mode": Tensor.div,
-  "aten.mul.out": operator.mul,
-  "aten.bmm.out": operator.matmul,
-  # NOTE: because these methods have a name with "Tensor" in them, they can't go in simple tensor methods
-  "aten.remainder.Tensor_out": Tensor.mod,
-  "aten.pow.Tensor_Tensor_out": Tensor.pow,
-  "aten.pow.Tensor_Scalar_out": Tensor.pow,
-  "aten.pow.Scalar_out": lambda input,exponent: input**exponent,
-  "aten.bitwise_and.Tensor_out": Tensor.bitwise_and,
-  "aten.bitwise_or.Tensor_out": Tensor.bitwise_or,
-  "aten.bitwise_xor.Tensor_out": Tensor.bitwise_xor,
-  "aten.eq.Tensor_out": Tensor.eq, "aten.eq.Scalar_out": Tensor.eq,
-  "aten.ne.Tensor_out": Tensor.ne, "aten.ne.Scalar_out": Tensor.ne,
-  "aten.ge.Tensor_out": Tensor.__ge__, "aten.ge.Scalar_out": Tensor.__ge__,
-  "aten.gt.Tensor_out": Tensor.__gt__, "aten.gt.Scalar_out": Tensor.__gt__,
-  "aten.lt.Tensor_out": Tensor.__lt__, "aten.lt.Scalar_out": Tensor.__lt__,
-  "aten.le.Tensor_out": Tensor.__le__, "aten.le.Scalar_out": Tensor.__le__,
-  "aten.clamp_max.Tensor_out": lambda input,max_: input.clamp(max_=max_),
-  "aten.clamp_min.Tensor_out": lambda input,min_: input.clamp(min_=min_),
-  "aten.fmod.Tensor_out": lambda input,other: input-input.div(other, rounding_mode="trunc")*other,
-  # TODO: this might result in overflow issues
-  "aten.round.decimals_out": lambda self,decimals: (self*10**decimals).round()/10**decimals,
-  # TODO: support this in tinygrad
-  "aten.bitwise_left_shift.Tensor_out": lambda x,y: x*(2**y),
-  "aten.bitwise_right_shift.Tensor_out": lambda x,y: x//(2**y),
-  # not in tinygrad. are there decomps for these?
-  "aten.log1p.out": lambda self: (self+1).log(),
-  "aten.expm1.out": lambda self: self.exp() - 1,
-  "aten.fmax.out": lambda input,other: Tensor.where(input.isnan() & ~other.isnan(), other, Tensor.where(~input.isnan() & other.isnan(), input, Tensor.maximum(input, other))),
-  "aten.fmin.out": lambda input,other: Tensor.where(input.isnan() & ~other.isnan(), other, Tensor.where(~input.isnan() & other.isnan(), input, Tensor.minimum(input, other))),
-  "aten.amax.out": lambda self,dim=None: self.max(axis=dim),
-  "aten.amin.out": lambda self,dim=None: self.min(axis=dim),
-  # TODO: this gets the shape wrong
-  #"aten.arange.start_out": Tensor.arange,
-  "aten.lerp.Scalar_out": Tensor.lerp,
-  "aten.scatter.value_out": Tensor.scatter,
-  "aten.where.self_out": Tensor.where,
-  "aten.prod.int_out": Tensor.prod,
-  "aten.scatter.src_out": Tensor.scatter,
-  # NOTE: axis=[] in torch means all, change tinygrad?
-  "aten.sum.IntList_out": lambda self,axis,keepdim=False,dtype=None:
-    self.sum(axis if axis is None or len(axis) else None, keepdim,
-                         dtype = _from_torch_dtype(dtype) if dtype is not None else None),
+  # NOTE: most ops now use decompositions via prims, only keep ops without decomps
+  "aten.all.all_out": Tensor.all,  # needed for torch.all() without dim
+  "aten.any.all_out": Tensor.any,  # needed for torch.any() without dim
+  "aten.bmm.out": operator.matmul,  # no decomp
+  "aten.clamp_max.Tensor_out": lambda input,max_: input.clamp(max_=max_),  # aten-only decomp
+  "aten.clamp_min.Tensor_out": lambda input,min_: input.clamp(min_=min_),  # aten-only decomp
+  "aten.round.decimals_out": lambda self,decimals: (self*10**decimals).round()/10**decimals,  # special case
+  "aten.bitwise_left_shift.Tensor_out": lambda x,y: x*(2**y),  # keep for now
+  "aten.bitwise_right_shift.Tensor_out": lambda x,y: x//(2**y),  # keep for now
+  "aten.lerp.Scalar_out": Tensor.lerp,  # no prims.copy_strided
+  "aten.scatter.value_out": Tensor.scatter,  # no decomp
+  "aten.scatter.src_out": Tensor.scatter,  # no decomp
 }}
 
 # we add the "out" here
@@ -559,87 +570,68 @@ def _inplace_op(t, new_value):
   return t
 
 tiny_backend = {**{k:wrap_out(v) for k,v in tiny_backend_out.items()}, **{
-  "aten.remainder.Scalar_Tensor": lambda x,y: x%y,
+  # NOTE: most ops now use decompositions via prims, only keep ops without decomps or special cases
   "aten.floor_divide": lambda x,y: x//y,
   "aten.floor_divide_.Tensor": lambda x,y: x//y,
-  # TODO: use tinygrad methods, but they require x to be unsigned
   "aten.__lshift__.Scalar": lambda x,y: x*(2**y),
   "aten.__ilshift__.Scalar": lambda x,y: x*(2**y),
   "aten.__rshift__.Scalar": lambda x,y: x//(2**y),
   "aten.__irshift__.Scalar": lambda x,y: x//(2**y),
-  # inplace ops using replace for fusion
+  # inplace ops
   "aten.zero_": lambda x: x.zeros_like(),
   "aten.fill_.Scalar": lambda x, y: x.full_like(y),
+  "aten.fill_.Tensor": lambda self, value: Tensor.full(self.shape, value.reshape(()).item(), device=self.device, dtype=self.dtype),
   "aten.add_.Tensor": lambda self, other, alpha=1.0: self + other * alpha,
   "aten.add_.Scalar": lambda self, other, alpha=1.0: self + other * alpha,
   "aten.mul_.Tensor": lambda self, other: self * other,
   "aten.mul_.Scalar": lambda self, other: self * other,
-  # relu doesn't have an out form?
-  "aten.relu": Tensor.relu,
+  "aten.relu": Tensor.relu,  # aten-only decomp
   "aten.relu_": lambda x: x.relu(),
+  # ops without decompositions
   "aten.mean": Tensor.mean,
   "aten.mean.dim": Tensor.mean,
   "aten.min": Tensor.min,
   "aten.max": Tensor.max,
+  "aten.max.dim": lambda self, dim, keepdim=False: (self.max(dim, keepdim), self.argmax(dim, keepdim).cast(dtype=dtypes.int64)),
   "aten.mm": Tensor.matmul,
   "aten.mv": Tensor.matmul,
   "aten.dot": Tensor.dot,
-  "aten.prod": Tensor.prod,
   "aten.isnan": Tensor.isnan,
-  "aten.std.correction": Tensor.std,
-  "aten.std_mean.correction": Tensor.std_mean,
-  "aten.var.correction": Tensor.var,
-  "aten.var_mean.correction": Tensor.var_mean,
+  "aten.std.correction": Tensor.std,  # aten-only decomp
+  "aten.std_mean.correction": Tensor.std_mean,  # aten-only decomp
   "aten.scatter.value": Tensor.scatter,
   "aten.scatter.value_reduce": Tensor.scatter,
+  "aten.scatter_reduce.two": Tensor.scatter_reduce,
   "aten.gather": lambda self, dim, index: self.gather(dim, index.cast(dtypes.int)),
-  "aten.where.self": Tensor.where, # NOTE: this is needed as well as the out type
-  "aten.repeat": lambda x,*repeats: Tensor.repeat(x,*repeats).contiguous(), # not a view
-  "aten._softmax": lambda self,dim,half_to_float: self.softmax(dim),
-  "aten._log_softmax": lambda self,dim,half_to_float: self.log_softmax(dim),
+  "aten.repeat": lambda x,*repeats: Tensor.repeat(x,*repeats).contiguous(),  # aten-only decomp
+  "aten._softmax": lambda self,dim,half_to_float: self.softmax(dim),  # aten-only decomp
+  "aten._log_softmax": lambda self,dim,half_to_float: self.log_softmax(dim),  # aten-only decomp
   "aten.random_": lambda self: Tensor.randint(*self.shape, low=dtypes.min(self.dtype), high=dtypes.max(self.dtype), device=self.device, dtype=self.dtype),
   "aten.random_.from": lambda self, from_, to: Tensor.randint(*self.shape, low=from_, high=to, device=self.device, dtype=self.dtype),
   "aten.uniform_": lambda self, low=0, high=1: Tensor.uniform(*self.shape, low=low, high=high, dtype=self.dtype),
   "aten.normal_": lambda self, mean=0, std=1: Tensor.normal(*self.shape, mean=mean, std=std, dtype=self.dtype),
-  # these don't work in out form, they have size 0
-  "aten.abs": Tensor.abs,
-  "aten.logical_not": Tensor.logical_not,
+  "aten.logical_not": Tensor.logical_not,  # aten-only decomp
   "aten.logical_or_": lambda x, y: x | y,
   "aten.multinomial": Tensor.multinomial,
   "aten.masked_fill_.Scalar": lambda self, mask, value: self.masked_fill(mask, value),
   "aten.masked_fill_.Tensor": lambda self, mask, value: self.masked_fill(mask, value),
-  "aten.masked_fill.Scalar": Tensor.masked_fill,
-  "aten.masked_fill.Tensor": Tensor.masked_fill,
+  "aten.masked_fill.Scalar": Tensor.masked_fill,  # aten-only decomp
+  "aten.masked_fill.Tensor": Tensor.masked_fill,  # aten-only decomp
   "aten.masked_select": Tensor.masked_select,
-  "aten.all": Tensor.all,
-  "aten.sgn": Tensor.sign,
-  "aten.acos": Tensor.acos,
-  "aten.any": Tensor.any,
-  "aten.bitwise_not": Tensor.bitwise_not,
+  "aten.sgn": Tensor.sign,  # aten-only decomp
   "aten.argmax": Tensor.argmax,
   "aten.argmin": Tensor.argmin,
-  "aten.asinh": Tensor.asinh,
-  "aten.mul": Tensor.mul,
-  "aten.atanh": Tensor.atanh,
-  "aten.fill_.Tensor": lambda self, value: Tensor.full(self.shape, value.reshape(()).item(), device=self.device, dtype=self.dtype),
-  "aten.flip": Tensor.flip,
-  "aten.scatter_reduce.two": Tensor.scatter_reduce,
-  "aten.squeeze_.dim": lambda self, dim: self.replace(self.squeeze(dim), allow_shape_mismatch=True), # TODO: inplace view op, here?
-  "aten.add.Tensor": lambda input,other,alpha=1: input+alpha*other,
-  "aten.linspace": lambda start, stop, steps, dtype=None, **kwargs:
-    Tensor.linspace(start, stop, steps, **({"dtype": _from_torch_dtype(dtype)} if dtype is not None else {})),
+  "aten.squeeze_.dim": lambda self, dim: self.replace(self.squeeze(dim), allow_shape_mismatch=True),
   "aten.topk": Tensor.topk,
-  "aten.constant_pad_nd": lambda self, padding, value=0.0: self.pad(padding, mode="constant", value=value).contiguous(),
-  "aten.cumsum": lambda self, dim: self.cumsum(dim).contiguous(), # TODO: fix test_simple_cumsum, fails without contiguous for shapes >512
-  "aten.logsumexp": lambda self, axis, keepdim=False: self.logsumexp(axis[0], keepdim=keepdim),
-  "aten.roll": Tensor.roll,
+  "aten.cumsum": lambda self, dim: self.cumsum(dim).contiguous(),  # aten-only decomp
+  "aten.logsumexp": lambda self, axis, keepdim=False: self.logsumexp(axis[0], keepdim=keepdim),  # aten-only decomp
+  "aten.roll": Tensor.roll,  # aten-only decomp
   "aten.logcumsumexp": Tensor.logcumsumexp,
-  "aten.lerp.Tensor": Tensor.lerp,
+  "aten.lerp.Tensor": Tensor.lerp,  # no prims.copy_strided
   "aten.ones_like": lambda self, dtype=None, device=None, **kwargs:
     self.ones_like(**{k: v for k, v in {"dtype": _from_torch_dtype(dtype) if dtype else None,
                                         "device": _from_torch_device(device) if device else None}.items() if v is not None}),
-  "aten.max.dim": lambda self, dim, keepdim=False: (self.max(dim, keepdim), self.argmax(dim, keepdim).cast(dtype=dtypes.int64)),
-  "aten.unfold": Tensor.unfold,
+  "aten.unfold": Tensor.unfold,  # aten-only decomp
 }}
 
 # operations that need inplace treatment (use _inplace_op instead of wrap_fxn) AKA return original tensor
@@ -756,3 +748,248 @@ def _pad_circular(self, padding): return _PadCircular.apply(self, padding)
 
 @torch.library.impl("aten::_pad_circular", "AutogradPrivateUse1")
 def _pad_circular_autograd(self, padding): return _PadCircular.apply(self, padding)
+
+# *** prims implementations (enables torch._refs decompositions) ***
+
+@torch.library.impl("prims::var", "privateuseone")
+def prims_var(inp, dims, correction=1, *, output_dtype=None):
+  return wrap(unwrap(inp).var(axis=tuple(dims) if dims else None, correction=correction))
+
+@torch.library.impl("prims::sum", "privateuseone")
+def prims_sum(inp, dims, *, output_dtype=None):
+  result = unwrap(inp).sum(axis=tuple(dims) if dims else None)
+  if output_dtype: result = result.cast(_from_torch_dtype(output_dtype))
+  return wrap(result)
+
+@torch.library.impl("prims::div", "privateuseone")
+def prims_div(self, other):
+  return wrap(unwrap(self) / (unwrap(other) if isinstance(other, torch.Tensor) else other))
+
+@torch.library.impl("prims::sub", "privateuseone")
+def prims_sub(self, other):
+  return wrap(unwrap(self) - (unwrap(other) if isinstance(other, torch.Tensor) else other))
+
+@torch.library.impl("prims::mul", "privateuseone")
+def prims_mul(self, other):
+  return wrap(unwrap(self) * (unwrap(other) if isinstance(other, torch.Tensor) else other))
+
+@torch.library.impl("prims::broadcast_in_dim", "privateuseone")
+def prims_broadcast_in_dim(a, shape, broadcast_dimensions):
+  t = unwrap(a)
+  # Create shape with 1s, then place original dims at broadcast_dimensions positions
+  expand_shape = [1] * len(shape)
+  for i, dim in enumerate(broadcast_dimensions): expand_shape[dim] = t.shape[i]
+  return wrap(t.reshape(expand_shape).expand(shape))
+
+@torch.library.impl("prims::convert_element_type", "privateuseone")
+def prims_convert_element_type(a, dtype):
+  return wrap(unwrap(a).cast(_from_torch_dtype(dtype)))
+
+@torch.library.impl("prims::squeeze", "privateuseone")
+def prims_squeeze(a, dimensions):
+  t = unwrap(a)
+  for dim in sorted(dimensions, reverse=True): t = t.squeeze(dim)
+  return wrap(t)
+
+@torch.library.impl("prims::rsqrt", "privateuseone")
+def prims_rsqrt(self):
+  return wrap(unwrap(self).rsqrt())
+
+# unary prims
+@torch.library.impl("prims::abs", "privateuseone")
+def prims_abs(self): return wrap(unwrap(self).abs())
+
+@torch.library.impl("prims::neg", "privateuseone")
+def prims_neg(self): return wrap(-unwrap(self))
+
+@torch.library.impl("prims::sqrt", "privateuseone")
+def prims_sqrt(self): return wrap(unwrap(self).sqrt())
+
+@torch.library.impl("prims::reciprocal", "privateuseone")
+def prims_reciprocal(self): return wrap(unwrap(self).reciprocal())
+
+@torch.library.impl("prims::exp", "privateuseone")
+def prims_exp(self): return wrap(unwrap(self).exp())
+
+@torch.library.impl("prims::exp2", "privateuseone")
+def prims_exp2(self): return wrap(unwrap(self).exp2())
+
+@torch.library.impl("prims::expm1", "privateuseone")
+def prims_expm1(self): return wrap(unwrap(self).exp() - 1)
+
+@torch.library.impl("prims::log", "privateuseone")
+def prims_log(self): return wrap(unwrap(self).log())
+
+@torch.library.impl("prims::log2", "privateuseone")
+def prims_log2(self): return wrap(unwrap(self).log2())
+
+@torch.library.impl("prims::log10", "privateuseone")
+def prims_log10(self): return wrap(unwrap(self).log10())
+
+@torch.library.impl("prims::log1p", "privateuseone")
+def prims_log1p(self): return wrap((unwrap(self) + 1).log())
+
+@torch.library.impl("prims::sin", "privateuseone")
+def prims_sin(self): return wrap(unwrap(self).sin())
+
+@torch.library.impl("prims::cos", "privateuseone")
+def prims_cos(self): return wrap(unwrap(self).cos())
+
+@torch.library.impl("prims::tan", "privateuseone")
+def prims_tan(self): return wrap(unwrap(self).tan())
+
+@torch.library.impl("prims::sinh", "privateuseone")
+def prims_sinh(self): return wrap(unwrap(self).sinh())
+
+@torch.library.impl("prims::cosh", "privateuseone")
+def prims_cosh(self): return wrap(unwrap(self).cosh())
+
+@torch.library.impl("prims::tanh", "privateuseone")
+def prims_tanh(self): return wrap(unwrap(self).tanh())
+
+@torch.library.impl("prims::asin", "privateuseone")
+def prims_asin(self): return wrap(unwrap(self).asin())
+
+@torch.library.impl("prims::acos", "privateuseone")
+def prims_acos(self): return wrap(unwrap(self).acos())
+
+@torch.library.impl("prims::atan", "privateuseone")
+def prims_atan(self): return wrap(unwrap(self).atan())
+
+@torch.library.impl("prims::asinh", "privateuseone")
+def prims_asinh(self): return wrap(unwrap(self).asinh())
+
+@torch.library.impl("prims::acosh", "privateuseone")
+def prims_acosh(self): return wrap(unwrap(self).acosh())
+
+@torch.library.impl("prims::atanh", "privateuseone")
+def prims_atanh(self): return wrap(unwrap(self).atanh())
+
+@torch.library.impl("prims::ceil", "privateuseone")
+def prims_ceil(self): return wrap(unwrap(self).ceil())
+
+@torch.library.impl("prims::floor", "privateuseone")
+def prims_floor(self): return wrap(unwrap(self).floor())
+
+@torch.library.impl("prims::round", "privateuseone")
+def prims_round(self): return wrap(unwrap(self).round())
+
+@torch.library.impl("prims::trunc", "privateuseone")
+def prims_trunc(self): return wrap(unwrap(self).trunc())
+
+@torch.library.impl("prims::sign", "privateuseone")
+def prims_sign(self): return wrap(unwrap(self).sign())
+
+@torch.library.impl("prims::erf", "privateuseone")
+def prims_erf(self): return wrap(unwrap(self).erf())
+
+@torch.library.impl("prims::bitwise_not", "privateuseone")
+def prims_bitwise_not(self): return wrap(unwrap(self).bitwise_not())
+
+# binary prims - handle both tensor and scalar inputs
+def _unwrap_or_scalar(x): return unwrap(x) if isinstance(x, torch.Tensor) else x
+
+@torch.library.impl("prims::add", "privateuseone")
+def prims_add(self, other): return wrap(unwrap(self) + _unwrap_or_scalar(other))
+
+@torch.library.impl("prims::maximum", "privateuseone")
+def prims_maximum(self, other): return wrap(Tensor.maximum(unwrap(self), _unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::minimum", "privateuseone")
+def prims_minimum(self, other): return wrap(Tensor.minimum(unwrap(self), _unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::pow", "privateuseone")
+def prims_pow(self, other): return wrap(unwrap(self).pow(_unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::remainder", "privateuseone")
+def prims_remainder(self, other): return wrap(unwrap(self) % _unwrap_or_scalar(other))
+
+@torch.library.impl("prims::fmod", "privateuseone")
+def prims_fmod(self, other):
+  x, y = unwrap(self), _unwrap_or_scalar(other)
+  return wrap(x - x.div(y, rounding_mode="trunc") * y)
+
+@torch.library.impl("prims::atan2", "privateuseone")
+def prims_atan2(self, other): return wrap(Tensor.atan2(unwrap(self), _unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::bitwise_and", "privateuseone")
+def prims_bitwise_and(self, other): return wrap(unwrap(self).bitwise_and(_unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::bitwise_or", "privateuseone")
+def prims_bitwise_or(self, other): return wrap(unwrap(self).bitwise_or(_unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::bitwise_xor", "privateuseone")
+def prims_bitwise_xor(self, other): return wrap(unwrap(self).bitwise_xor(_unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::shift_left", "privateuseone")
+def prims_shift_left(self, other): return wrap(unwrap(self) * (2 ** _unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::shift_right_arithmetic", "privateuseone")
+def prims_shift_right_arithmetic(self, other): return wrap(unwrap(self) // (2 ** _unwrap_or_scalar(other)))
+
+# comparison prims
+@torch.library.impl("prims::eq", "privateuseone")
+def prims_eq(self, other): return wrap(unwrap(self).eq(_unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::ne", "privateuseone")
+def prims_ne(self, other): return wrap(unwrap(self).ne(_unwrap_or_scalar(other)))
+
+@torch.library.impl("prims::lt", "privateuseone")
+def prims_lt(self, other): return wrap(unwrap(self) < _unwrap_or_scalar(other))
+
+@torch.library.impl("prims::le", "privateuseone")
+def prims_le(self, other): return wrap(unwrap(self) <= _unwrap_or_scalar(other))
+
+@torch.library.impl("prims::gt", "privateuseone")
+def prims_gt(self, other): return wrap(unwrap(self) > _unwrap_or_scalar(other))
+
+@torch.library.impl("prims::ge", "privateuseone")
+def prims_ge(self, other): return wrap(unwrap(self) >= _unwrap_or_scalar(other))
+
+# reduction prims
+@torch.library.impl("prims::prod", "privateuseone")
+def prims_prod(inp, dims, *, output_dtype=None):
+  result = unwrap(inp).prod(axis=tuple(dims) if dims else None)
+  if output_dtype: result = result.cast(_from_torch_dtype(output_dtype))
+  return wrap(result)
+
+@torch.library.impl("prims::amax", "privateuseone")
+def prims_amax(inp, dims, *, output_dtype=None):
+  return wrap(unwrap(inp).max(axis=tuple(dims) if dims else None))
+
+@torch.library.impl("prims::amin", "privateuseone")
+def prims_amin(inp, dims, *, output_dtype=None):
+  return wrap(unwrap(inp).min(axis=tuple(dims) if dims else None))
+
+# other essential prims
+@torch.library.impl("prims::where", "privateuseone")
+def prims_where(pred, a, b): return wrap(Tensor.where(unwrap(pred), _unwrap_or_scalar(a), _unwrap_or_scalar(b)))
+
+@torch.library.impl("prims::cat", "privateuseone")
+def prims_cat(tensors, dim): return wrap(Tensor.cat(*[unwrap(t) for t in tensors], dim=dim))
+
+@torch.library.impl("prims::clone", "privateuseone")
+def prims_clone(self, *, memory_format=None): return wrap(unwrap(self).contiguous())
+
+@torch.library.impl("prims::view_of", "privateuseone")
+def prims_view_of(a): return wrap(unwrap(a))
+
+@torch.library.impl("prims::transpose", "privateuseone")
+def prims_transpose(a, permutation): return wrap(unwrap(a).permute(permutation))
+
+@torch.library.impl("prims::rev", "privateuseone")
+def prims_rev(a, dims): return wrap(unwrap(a).flip(dims))
+
+@torch.library.impl("prims::fmax", "privateuseone")
+def prims_fmax(self, other):
+  x, y = unwrap(self), unwrap(other)
+  return wrap(Tensor.where(x.isnan() & ~y.isnan(), y, Tensor.where(~x.isnan() & y.isnan(), x, Tensor.maximum(x, y))))
+
+@torch.library.impl("prims::fmin", "privateuseone")
+def prims_fmin(self, other):
+  x, y = unwrap(self), unwrap(other)
+  return wrap(Tensor.where(x.isnan() & ~y.isnan(), y, Tensor.where(~x.isnan() & y.isnan(), x, Tensor.minimum(x, y))))
+
+@torch.library.impl("prims::iota", "privateuseone")
+def prims_iota(length, *, start, step, dtype, device, requires_grad):
+  return wrap(Tensor.arange(start, start + length * step, step, dtype=_from_torch_dtype(dtype), device=_from_torch_device(device)))
