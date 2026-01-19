@@ -161,6 +161,9 @@ def remove_bufferize(src:UOp, buf:UOp, idx:UOp):
   # if it's user contiguous, we never remove it
   if src.op in ALWAYS_RUN_OPS or not buf.arg.removable: return None
 
+  # if src is too large, keep the bufferize to avoid graph explosion during substitution.
+  if len(src.toposort()) > 1000: return None
+
   # we don't want to bufferize threefry, also causes problems because not all platforms support long
   if src.op is not Ops.THREEFRY:
     # *** here is where we compute the cost ***
