@@ -1,5 +1,5 @@
 import unittest
-from tinygrad import Tensor, nn, Device
+from tinygrad import Tensor, nn, Device, dtypes
 from tinygrad.helpers import Context, GlobalCounters, getenv, PCONTIG, DEBUG
 from tinygrad.uop.ops import graph_rewrite, PatternMatcher, UPat, Ops
 from tinygrad.codegen.opt import OptOps, Opt
@@ -205,6 +205,27 @@ class TestRangeifyPM(unittest.TestCase):
     a = self.base.pad(((0,0),(0,1))).pad(((0,1),(0,0)))
     b = self.base.pad(((0,1),(0,0))).pad(((0,0),(0,1)))
     self.assert_same(a, b)
+
+class TestRemoveBufferize(unittest.TestCase):
+  def test_large_validity_condition_graph(self):
+    # regression test: remove_bufferize was causing infinite loop in graph_rewrite when src had >1000 nodes.
+    # ScatterND-like indexed assignments create deep AND/OR/CMPNE validity condition trees. when remove_bufferize
+    # called substitute() on these, each call created ~1K+ new nodes. with many INDEX(BUFFERIZE(...)) patterns
+    # matching, the graph_rewrite stack exceeded limits. fix: skip remove_bufferize when src.toposort() > 1000.
+    Tensor.manual_seed(0)
+    B, T, S, C, N = 1, 18, 6, 8, 6
+    x = Tensor.zeros((B, T, S, C)).contiguous().realize()
+    b_idx = Tensor.zeros((B, T, S, N), dtype=dtypes.int)
+    t_idx = Tensor.arange(T, dtype=dtypes.int).reshape(1, T, 1, 1).expand(B, T, S, N)
+    s_idx = Tensor.arange(S, dtype=dtypes.int).reshape(1, 1, S, 1).expand(B, T, S, N)
+    c_idx = Tensor.randint(B, T, S, N, low=0, high=C, dtype=dtypes.int)
+    indices = Tensor.stack(b_idx, t_idx, s_idx, c_idx, dim=-1)
+    updates = Tensor.randn(B, T, S, N)
+    # ScatterND-like operation: for each index tuple, assign the update value
+    for index, u in zip(indices.split(1, 0), updates.split(1, 0)):
+      i = tuple(idx.squeeze(-1) for idx in index.squeeze(0).split(1, -1))
+      x[i] = u.squeeze(0)
+    x.realize()
 
 if __name__ == '__main__':
   unittest.main()
