@@ -27,7 +27,7 @@ import numpy as np
 import torch
 from tinygrad import Tensor, dtypes, nn
 from tinygrad.device import Device, is_dtype_supported
-from tinygrad.helpers import getenv
+from tinygrad.helpers import getenv, Context
 from tinygrad.renderer.nir import NIRRenderer
 
 MOCKGPU = getenv("MOCKGPU")
@@ -213,7 +213,12 @@ class TestUOpValidationIssue(unittest.TestCase):
     val = Tensor([1])
     big = val.expand(2**31 + 3)
     idx = Tensor([0, 2**31 + 2])
-    np.testing.assert_equal(big[idx].numpy(), np.array([1, 1]))
+    # TODO: SPLIT_REDUCEOP=0 fails due to integer overflow in one-hot gather computation for very large tensors
+    with Context(SPLIT_REDUCEOP=1):
+      np.testing.assert_equal(big[idx].numpy(), np.array([1, 1]))
+    with Context(SPLIT_REDUCEOP=0):
+      # this is broken, split masks the overflow bug
+      np.testing.assert_equal(big[idx].numpy(), np.array([1, 0]))
 
   def test_float_floordiv_scalar(self):
     (Tensor.arange(4, dtype=dtypes.float32) // 2).realize()
