@@ -406,6 +406,9 @@ class OnnxRunner:
     self.graph_nodes = tuple(n["parsed_node"] for n in graph["node"])
     # track names from initializers and Constant nodes for fast path optimizations
     self.const_names: set[str] = set(self.graph_values.keys()) | {o for n in self.graph_nodes if n.op == "Constant" for o in n.outputs}
+    # propagate const status: if all inputs are const, outputs are const (ONNX nodes are topologically sorted)
+    for node in self.graph_nodes:
+      if all(inp in self.const_names for inp in node.inputs): self.const_names.update(node.outputs)
 
     self.old_training = Tensor.training
     Tensor.training = self.is_training
@@ -471,6 +474,9 @@ class OnnxRunner:
       # for Gather, convert indices to python const if from Constant/initializer for shrink fast path
       if node.op == "Gather" and len(node.inputs) > 1 and node.inputs[1] in self.const_names:
         inps[1] = _cached_to_python_const(self.graph_values[node.inputs[1]])
+      # for If, convert condition to python const to skip unused branch execution
+      if node.op == "If" and node.inputs[0] in self.const_names:
+        inps[0] = _cached_to_python_const(self.graph_values[node.inputs[0]])
 
       if debug >= 1: print((f"[{self.graph_name}] " if self.graph_name else "") + f"{num}: op '{node.op}' opt {opts}")
       if debug >= 2 and node.inputs: print("\tinputs:\n" + "\n".join(f"\t\t{x} - {i!r}" for x,i in zip(node.inputs, inps)))
@@ -554,13 +560,15 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
     return __decorator
 
   # ***** Property/Graph Ops *****
-  def If(condition:Tensor, else_branch:OnnxRunner, then_branch:OnnxRunner, intermediate_tensors:dict[str, Tensor]):
+  def If(condition:Tensor|bool|list[bool], else_branch:OnnxRunner, then_branch:OnnxRunner, intermediate_tensors:dict[str, Tensor]):
     def run_branch(branch:OnnxRunner):
       branch.graph_values.update(intermediate_tensors)
       out = branch({k:intermediate_tensors[k] for k in branch.graph_inputs.keys()})
       # dereference intermediate tensors so Buffer can be deallocated
       for k in intermediate_tensors: del branch.graph_values[k]
       return out
+    # if condition is python bool, only run the needed branch
+    if not isinstance(condition, Tensor): return tuple(run_branch(then_branch if _resolve_const(condition) else else_branch).values())
     # both branch must be ran before the condition can be evaluated
     else_out, then_out = run_branch(else_branch), run_branch(then_branch)
     assert len(else_out) == len(then_out), f"else_out and then_out must have the same number of outputs: {len(else_out)} != {len(then_out)}"

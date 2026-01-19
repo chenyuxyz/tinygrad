@@ -137,6 +137,30 @@ class TestMainOnnxOps(TestOnnxOps):
   def test_if_different_shapes_not_broadcastable(self):
     self._test_if(np.array([[1, 2, 3], [4, 5, 6]]).astype(np.float32), np.array([[6, 5, 4, 3, 2, 1]]).astype(np.float32))
 
+  def test_if_const_fold(self):
+    # test IF with condition computed from constants: Greater(Sub(4, 2), 0) = True
+    # this pattern appears in sam2_hiear2_tiny.onnx where IF condition is computed from initializers
+    then_val, else_val = np.array([1.0, 2.0, 3.0], dtype=np.float32), np.array([9.0, 8.0, 7.0], dtype=np.float32)
+    then_out = onnx.helper.make_tensor_value_info("res", onnx.TensorProto.FLOAT, [3])
+    else_out = onnx.helper.make_tensor_value_info("res", onnx.TensorProto.FLOAT, [3])
+    def make_const(v, n): return onnx.helper.make_node("Constant", [], [n], value=onnx.numpy_helper.from_array(v))
+    then_body = onnx.helper.make_graph([make_const(then_val, "res")], "then", [], [then_out])
+    else_body = onnx.helper.make_graph([make_const(else_val, "res")], "else", [], [else_out])
+    # condition: Greater(Sub(4, 2), 0) = Greater(2, 0) = True, use shape (1,) tensors like sam2
+    nodes = [onnx.helper.make_node("Sub", ["c4", "c2"], ["sub"]), onnx.helper.make_node("Greater", ["sub", "c0"], ["cond"]),
+             onnx.helper.make_node("If", ["cond"], ["res"], then_branch=then_body, else_branch=else_body)]
+    inits = [onnx.numpy_helper.from_array(np.array([x], dtype=np.int64), n) for x, n in [(4, "c4"), (2, "c2"), (0, "c0")]]
+    graph = onnx.helper.make_graph(nodes, "test", [onnx.helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [1])],
+                                   [onnx.helper.make_tensor_value_info("res", onnx.TensorProto.FLOAT, [3])], inits)
+    model = onnx.helper.make_model(graph, opset_imports=[onnx.helper.make_opsetid("", 17)])
+    with tempfile.NamedTemporaryFile(suffix=".onnx") as f:
+      onnx.save(model, f.name)
+      runner = OnnxRunner(f.name)
+      # verify const folding: condition should be in const_names
+      assert "cond" in runner.const_names, "IF condition should be const-folded"
+      # verify correctness: Greater(2, 0) = True -> then branch
+      np.testing.assert_equal(list(runner({"x": np.array([0.0], dtype=np.float32)}).values())[0].numpy(), then_val)
+
   def test_resize_downsample_scales_linear_align_corners(self):
     # https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-131
     X = np.array([[[[1, 2, 3, 4], [5, 6, 7, 8]]]], dtype=np.float32)
