@@ -39,7 +39,7 @@ class MetalGraph(GraphRunner):
       all_pipelines.append(prg._prg.pipeline_state)
       icb_command.setComputePipelineState(prg._prg.pipeline_state)
       for i,b in enumerate(ji.bufs):
-        if b is not None and b not in input_buffers:
+        if b is not None and not self.is_input_replace(j, i):
           icb_command.setKernelBuffer_offset_atIndex(b._buf.buf, b._buf.offset, i)
           all_resources.append(b._buf.buf)
       for i,v in enumerate(prg.p.vars): icb_command.setKernelBuffer_offset_atIndex(self.int_buf.buf, self.varlist.index(v.expr)*4, len(ji.bufs)+i)

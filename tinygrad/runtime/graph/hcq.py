@@ -166,7 +166,7 @@ class HCQGraph(MultiGraphRunner):
       elif isinstance(ji.prg, (BufferXfer, BufferCopy)):
         dest, src = [cast(Buffer, x) for x in ji.bufs[0:2]]
         for bufid, src in enumerate(cast(list[Buffer], ji.bufs)):
-          if (inprep_idx:=self.input_replace.get((j, bufid))) is not None: self.input_replace_map[enqueue_dev].add(inprep_idx)
+          if self.is_input_replace(j, bufid): self.input_replace_map[enqueue_dev].add(self.input_replace[(j, bufid)])
           else: cast(HCQAllocator, enqueue_dev.allocator).map(self.hcq_bufs[j][bufid])
         enqueue_queue.copy(self.hcq_bufs[j][0].va_addr, self.hcq_bufs[j][1].va_addr, dest.nbytes)
         self.copy_to_devs[cast(HCQCompiled, Device[dest.device])].add(cast(HCQCompiled, Device[src.device]))

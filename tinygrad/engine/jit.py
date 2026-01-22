@@ -120,6 +120,10 @@ class GraphRunner(Runner):
     for j, vidxs in self.var_vals_replace.items():
       for i, v in vidxs: yield j, i, vals[v]
 
+  def is_input_replace(self, j: int, i: int) -> bool:
+    """Returns True if buffer at position (j, i) will be updated during __call__, False if it should be set statically."""
+    return (j, i) in self.input_replace
+
   def updated_launch_dims(self, var_vals: dict[str, int]):
     dims = [tuple(sym_infer(s, var_vals) for s in dim) for dim in self.symbolic_dims]
     for j, (gl, lc) in self.launch_dims_replace.items():
