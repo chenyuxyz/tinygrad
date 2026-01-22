@@ -225,8 +225,19 @@ class CapturedJit(Generic[ReturnType]):
           if b is not None: b.ensure_allocated()
       # create graph if needed
       if JIT < 2:
+        # build a map from ExecItem object to the buffer positions that are valid inputs (from original input_replace)
+        orig_valid_positions: dict[int, set[int]] = {}  # id(ExecItem) -> set of valid buffer indices
+        for (j, i) in self.input_replace: orig_valid_positions.setdefault(id(self.jit_cache[j]), set()).add(i)
         self._jit_cache = apply_graph_to_jit(self.jit_cache, input_buffers, var_vals, max_batch_size=JIT_BATCH_SIZE.value)
-        self._input_replace = get_input_replace(self._jit_cache, input_buffers)
+        # recompute input_replace, but filter out spurious output positions caused by aliasing (input buffer == output buffer)
+        # for GraphRunner items: their bufs is input_buffers, so get_input_replace gives correct mappings
+        # for non-GraphRunner items: only keep positions that were valid in the original input_replace
+        new_input_replace = get_input_replace(self._jit_cache, input_buffers)
+        for (j, i), input_idx in list(new_input_replace.items()):
+          ji = self._jit_cache[j]
+          if not isinstance(ji.prg, GraphRunner) and i not in orig_valid_positions.get(id(ji), set()):
+            del new_input_replace[(j, i)]
+        self._input_replace = new_input_replace
       self._first_run = False
 
     if DEBUG >= 1 and len(self._jit_cache) >= 10: print(f"jit execs {len(self._jit_cache)} kernels")
