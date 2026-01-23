@@ -7,6 +7,7 @@ from tinygrad.helpers import Context
 from test.helpers import get_uops
 from tinygrad.uop.ops import UOp, Ops, graph_rewrite, sym_infer
 from tinygrad.uop.symbolic import sym, commutative, pm_simplify_valid
+from tinygrad.uop.decompositions import get_late_rewrite_patterns
 from tinygrad.uop.validate import uops_to_z3
 
 def check_uop_against_string(self, v:UOp, s:str):
@@ -192,6 +193,25 @@ class TestSymbolic(unittest.TestCase):
 
   def test_max_folds(self):
     self.helper_test_variable(Variable("a", 0, 20).maximum(10).maximum(11), 11, 20, "a.maximum(11)")
+
+  def test_min_folds(self):
+    # test that -where(-a < -b, -b, -a) -> where(a < b, a, b)
+    a = UOp(Ops.DEFINE_GLOBAL, dtypes.float.ptr(3), arg=1)
+    b = UOp(Ops.DEFINE_GLOBAL, dtypes.float.ptr(3), arg=2)
+    neg_a, neg_b = a.alu(Ops.NEG), b.alu(Ops.NEG)
+    # build: NEG(WHERE(CMPLT(NEG(a), NEG(b)), NEG(b), NEG(a)))
+    pattern = (neg_a < neg_b).where(neg_b, neg_a).alu(Ops.NEG)
+    # ops that don't have MAX but have CMPLT and NEG (like Metal)
+    ops = (Ops.CMPLT, Ops.NEG, Ops.WHERE)
+    pm = get_late_rewrite_patterns(ops, False)
+    result = graph_rewrite(pattern, pm)
+    # should become WHERE(CMPLT(a, b), a, b)
+    self.assertEqual(result.op, Ops.WHERE)
+    self.assertEqual(result.src[0].op, Ops.CMPLT)
+    self.assertIs(result.src[0].src[0], a)
+    self.assertIs(result.src[0].src[1], b)
+    self.assertIs(result.src[1], a)
+    self.assertIs(result.src[2], b)
 
   def test_add_min_max(self):
     self.helper_test_variable(Variable("a", 0, 8) * 2 + 12, 12, 16+12, "((a*2)+12)")
