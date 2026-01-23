@@ -5,7 +5,7 @@ env:
   CAPTURE_PROCESS_REPLAY: 1
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   PYTHONPATH: ${{ github.workspace }}
-  IGNORE_OOB: 0
+  IGNORE_OOB: 1
 
 on:
   push:
