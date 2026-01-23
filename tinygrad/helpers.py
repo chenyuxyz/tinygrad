@@ -152,6 +152,7 @@ class Context(contextlib.ContextDecorator):
   def __exit__(self, *args):
     for k,v in self.old_context.items(): ContextVar._cache[k].value = v
 
+@functools.total_ordering
 class ContextVar(Generic[T]):
   _cache: ClassVar[dict[str, ContextVar]] = {}
   value: T
@@ -162,8 +163,6 @@ class ContextVar(Generic[T]):
     self.value, self.key = getenv(key, default_value), key
   def __bool__(self): return bool(self.value)
   def __eq__(self, x): return self.value == x
-  def __ge__(self, x): return self.value >= x
-  def __gt__(self, x): return self.value > x
   def __lt__(self, x): return self.value < x
 
 DEBUG, IMAGE, BEAM, NOOPT = ContextVar("DEBUG", 0), ContextVar("IMAGE", 0), ContextVar("BEAM", 0), ContextVar("NOOPT", 0)
