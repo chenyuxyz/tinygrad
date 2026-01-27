@@ -1181,6 +1181,89 @@ class Tensor(OpMixin):
     # dim injection from None by including None dim size (which is 1) and dim collapse by skipping int dim size
     x = x.reshape(tuple(index['size'] for index in indices_parsed if not isinstance(index['index'], sint)))
 
+    # slice setitem: construct full modified tensor when v is provided and no tensor indexing
+    # skip for realized tensors (is_contiguous) to avoid read-write cycles; use view-based assign instead
+    has_tensor_idx = any(isinstance(idx_info['index'], Tensor) for idx_info in indices_parsed)
+    if v is not None and not has_tensor_idx and not self.uop.is_contiguous():
+      # v is the value to set at the sliced positions
+      vb = v.cast(self.dtype)._broadcast_to(_broadcast_shape(x.shape, v.shape))
+      # Step 1: Remove None dimensions from vb (they're not in self.shape)
+      # Track which vb dimensions come from None vs slice indices
+      vb_dim = 0
+      for idx_info in indices_parsed:
+        if idx_info['index'] is None:
+          vb = vb.squeeze(vb_dim)  # remove this dimension
+        elif not isinstance(idx_info['index'], int):
+          vb_dim += 1  # slice index, keep this dimension
+      # Now vb has dimensions only for slice indices
+      # Step 2: Create masks and expand vb for each dimension in self
+      masks = []
+      self_dim = 0
+      vb_dim = 0
+      for idx_info in indices_parsed:
+        if idx_info['index'] is None: continue
+        orig_size = self.shape[self_dim]
+        idx_tensor = Tensor.arange(orig_size, device=self.device, dtype=dtypes.int)
+        if isinstance(idx_info['index'], int):
+          # int index: mask is True only at that position
+          int_idx = idx_info['index']
+          if int_idx < 0: int_idx += orig_size
+          mask_dim = idx_tensor == int_idx
+          # add dimension for this int index to vb
+          vb = vb.unsqueeze(vb_dim)
+          vb_dim += 1
+        else:
+          # slice index
+          start, stop = idx_info['boundary']
+          stride = idx_info['stride']
+          if stride > 0:
+            mask_dim = (idx_tensor >= start) & (idx_tensor < stop) & ((idx_tensor - start) % stride == 0)
+          else:
+            mask_dim = (idx_tensor >= start) & (idx_tensor < stop) & ((stop - 1 - idx_tensor) % abs(stride) == 0)
+            vb = vb.flip((vb_dim,))
+          vb_dim += 1
+        masks.append(mask_dim)
+        self_dim += 1
+      # combine masks with broadcasting to match self.shape
+      if masks:
+        reshaped_masks = []
+        for mi, m in enumerate(masks):
+          reshaped_masks.append(m.reshape(tuple(m.shape[0] if j == mi else 1 for j in range(len(masks)))))
+        combined_mask = reshaped_masks[0]
+        for m in reshaped_masks[1:]:
+          combined_mask = combined_mask & m
+        # Step 3: Pad vb to match self.shape
+        padded_v = vb
+        self_dim = 0
+        for idx_info in indices_parsed:
+          if idx_info['index'] is None: continue
+          orig_size = self.shape[self_dim]
+          if isinstance(idx_info['index'], int):
+            int_idx = idx_info['index']
+            if int_idx < 0: int_idx += orig_size
+            padded_v = padded_v.pad(tuple((int_idx, orig_size - int_idx - 1) if j == self_dim else (0, 0) for j in range(padded_v.ndim)))
+          else:
+            start, stop = idx_info['boundary']
+            orig_stride = idx_info['stride']
+            stride = abs(orig_stride)
+            if stride == 1:
+              padded_v = padded_v.pad(tuple((start, orig_size - stop) if j == self_dim else (0, 0) for j in range(padded_v.ndim)))
+            else:
+              v_shape = list(padded_v.shape)
+              new_shape = v_shape[:self_dim] + [v_shape[self_dim], 1] + v_shape[self_dim+1:]
+              padded_v = padded_v.reshape(tuple(new_shape))
+              padded_v = padded_v.pad(tuple((0, stride-1) if j == self_dim+1 else (0, 0) for j in range(padded_v.ndim)))
+              new_shape2 = v_shape[:self_dim] + [v_shape[self_dim] * stride] + v_shape[self_dim+1:]
+              padded_v = padded_v.reshape(tuple(new_shape2))
+              # for negative stride, the first position is stop-1-(count-1)*stride, not start
+              left_pad = stop - 1 - (v_shape[self_dim] - 1) * stride if orig_stride < 0 else start
+              right_pad = orig_size - left_pad - v_shape[self_dim] * stride
+              padded_v = padded_v.pad(tuple((left_pad, right_pad) if j == self_dim else (0, 0) for j in range(padded_v.ndim)))
+              padded_v = padded_v.shrink(tuple((0, orig_size) if j == self_dim else (0, s) for j, s in enumerate(padded_v.shape)))
+          self_dim += 1
+        return combined_mask.where(padded_v, self)
+      return self  # no dimensions to modify (only None indices)
+
     # tensor indexing
     if tops := [(d,i) for d,i in enumerate(i_ for i_ in indices_parsed if not isinstance(i_['index'], int)) if isinstance(i['index'], Tensor)]:
       # unload the tensor object into actual tensors
@@ -1276,15 +1359,23 @@ class Tensor(OpMixin):
     if isinstance(v, get_args(ConstType)): v = Tensor(v, device=self.device, dtype=self.dtype)
     if not isinstance(v, Tensor): raise TypeError(f"can't set a {type(v).__name__} to a Tensor")
     if self.requires_grad or v.requires_grad: raise NotImplementedError("setitem with requires_grad is not supported")
-    self.realize()
-    if not self.uop.is_contiguous(): raise RuntimeError("setitem target needs to be contiguous")
-    res = self._getitem(indices, v)
-    # if shapes match and data is not shared it's a copy and we assign to self
-    if res.shape == self.shape and res.uop is not self.uop:
-      self.assign(res).realize()
-    else: # no copy, basic setitem
+    # for realized tensors (backed by buffer), use view-based assign to avoid read-write cycles
+    if self.uop.is_contiguous():
+      res = self._getitem(indices, v)
+      if res.shape == self.shape and res.uop is not self.uop:
+        self.assign(res).realize()
+      else:
+        v = v.cast(res.dtype)._broadcast_to(_broadcast_shape(res.shape, v.shape)).contiguous()
+        res.assign(v).realize()
+      return
+    # for unrealized tensors, construct full modified tensor lazily using _getitem with v
+    assign_to = self.contiguous()
+    res = assign_to._getitem(indices, v)
+    if res.shape == assign_to.shape and res.uop is not assign_to.uop:
+      self.replace(res)
+    else:
       v = v.cast(res.dtype)._broadcast_to(_broadcast_shape(res.shape, v.shape)).contiguous()
-      res.assign(v).realize()
+      res.assign(v)
 
   def __delitem__(self, indices) -> None:
     raise TypeError("Tensor does not support deleting items")
