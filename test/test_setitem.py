@@ -52,7 +52,8 @@ class TestSetitem(unittest.TestCase):
 
   def test_setitem_into_noncontiguous(self):
     t = Tensor.ones(4)
-    with self.assertRaises(RuntimeError): t[1] = 5
+    t[1] = 5
+    np.testing.assert_allclose(t.numpy(), [1, 5, 1, 1])
 
   @unittest.skip("TODO: flaky")
   def test_setitem_inplace_operator(self):
