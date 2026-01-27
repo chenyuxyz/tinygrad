@@ -67,6 +67,19 @@ class TestVminVmaxProperties(unittest.TestCase):
     self.assertEqual(uop.vmin, dtypes.min(dtypes.int32))
     self.assertEqual(uop.vmax, dtypes.max(dtypes.int32))
 
+  def test_vmin_vmax_and_symmetric(self):
+    # test symmetric case: const & variable (instead of just variable & const)
+    x = UOp.variable('x', -100, 100, dtypes.int32)
+    uop = 511 & x
+    self.assertEqual(uop.vmin, 0)
+    self.assertEqual(uop.vmax, 511)
+
+    # with non-negative variable, result bounded by min
+    y = UOp.variable('y', 0, 50, dtypes.int32)
+    uop = 100 & y
+    self.assertEqual(uop.vmin, 0)
+    self.assertEqual(uop.vmax, 50)  # min(100, 50)
+
   def test_vmin_vmax_multiplication_with_variable(self):
     # vmin and vmax for multiplication with a variable
     x = UOp.variable('x', -3, 4)
