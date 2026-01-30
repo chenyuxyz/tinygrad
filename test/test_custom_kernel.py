@@ -247,5 +247,130 @@ class TestCustomKernel(unittest.TestCase):
     err = (O_custom - O_ref).square().max()
     self.assertLess(err.item(), 1e-6)
 
+  # ============================================================================
+  # Regression tests for setdefault bug (commit cbb1eed57)
+  # These should FAIL with the broken code (in_degree[k] = 0 instead of setdefault)
+  # Run on AMD with DP=8: python -m pytest test/test_custom_kernel.py -k setdefault -xvs
+  # ============================================================================
+
+  def test_setdefault_v1_dp8_custom_kernel(self):
+    """Version 1: DP=8 sharding + custom_kernel (like FLASH_ATTENTION=1).
+
+    custom_kernel creates multiple AFTERs from the same kernel.
+    With 8 GPU sharding, this triggers the bug pattern on parallel execution.
+    """
+    from tinygrad import Device
+    DP = 8
+    devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(DP))
+
+    Tensor.manual_seed(42)
+
+    # Sharded weights (replicated across all devices like llama)
+    w = Tensor.randn(64, 64).shard(devs, axis=None).realize()
+
+    # Sharded input (split across batch dimension)
+    BS = DP * 4  # batch size = 32
+    x = Tensor.randn(BS, 64).shard(devs, axis=0).realize()
+    A = (x @ w).contiguous()
+    B = A.relu().contiguous()
+
+    # Sharded empty outputs
+    per_dev = 64 // DP
+    C = Tensor(Tensor.empty(per_dev, 64, device=devs).uop.multi(0), device=devs)
+    D = Tensor(Tensor.empty(per_dev, 64, device=devs).uop.multi(0), device=devs)
+
+    # custom_kernel creates multi-AFTER pattern
+    C, D = Tensor.custom_kernel(C, D, A, B, fxn=custom_elementwise_addmul_kernel)[:2]
+
+    result = (C.sum() + D.sum()).realize().item()
+    self.assertFalse(result != result, f"NaN detected! val={result}")
+
+  def test_setdefault_v2_dp8_grad_acc(self):
+    """Version 2: DP=8 + gradient accumulation (like llama GRADIENT_ACC_STEPS=2).
+
+    Multiple forward passes before combining, creating complex dependency graph.
+    """
+    from tinygrad import Device
+    DP = 8
+    devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(DP))
+
+    Tensor.manual_seed(42)
+
+    # Sharded weights
+    w1 = Tensor.randn(64, 64).shard(devs, axis=None).realize()
+    w2 = Tensor.randn(64, 32).shard(devs, axis=None).realize()
+
+    GRAD_ACC_STEPS = 2
+    all_results = []
+
+    for acc_step in range(GRAD_ACC_STEPS):
+      BS = DP * 4
+      x = Tensor.randn(BS, 64).shard(devs, axis=0).realize()
+
+      # Multiple layers like llama
+      h1 = (x @ w1).relu()
+      h2 = (h1 @ w1).relu()  # Reuse w1 (like attention reusing weights)
+      y = h2 @ w2
+
+      # Custom kernel (like flash attention)
+      per_dev = 32 // DP
+      out = Tensor(Tensor.empty(per_dev, 32, device=devs).uop.multi(0), device=devs)
+      tmp = Tensor(Tensor.empty(per_dev, 32, device=devs).uop.multi(0), device=devs)
+      out, tmp = Tensor.custom_kernel(out, tmp, y, y, fxn=custom_elementwise_addmul_kernel)[:2]
+
+      result = out.sum().realize().item()
+      all_results.append(result)
+      self.assertFalse(result != result, f"NaN at acc_step {acc_step}")
+
+    # Combine results (like gradient accumulation)
+    total = sum(all_results)
+    self.assertFalse(total != total, f"NaN in total: {total}")
+
+  def test_setdefault_v3_dp8_jit_training(self):
+    """Version 3: DP=8 + JIT + training loop (closest to llama dev_run.sh).
+
+    JIT-compiled training step with gradient accumulation.
+    """
+    from tinygrad import Device, TinyJit
+    DP = 8
+    devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(DP))
+
+    Tensor.manual_seed(42)
+
+    # Sharded model weights
+    w = Tensor.randn(64, 64).shard(devs, axis=None).realize()
+    per_dev = 64 // DP
+
+    @TinyJit
+    def forward_step(x):
+      x = x.shard(devs, axis=0)
+
+      # Multi-layer forward (like llama layers)
+      h = (x @ w).relu()
+      h = (h @ w).relu()
+      h = (h @ w).relu()
+
+      # Custom kernel creates multi-AFTER pattern
+      C = Tensor(Tensor.empty(per_dev, 64, device=devs).uop.multi(0), device=devs)
+      D = Tensor(Tensor.empty(per_dev, 64, device=devs).uop.multi(0), device=devs)
+      C, D = Tensor.custom_kernel(C, D, h, h, fxn=custom_elementwise_addmul_kernel)[:2]
+
+      return (C.sum() + D.sum()).realize()
+
+    GRAD_ACC_STEPS = 2
+    for step in range(3):
+      step_results = []
+      for acc in range(GRAD_ACC_STEPS):
+        BS = DP * 4
+        x = Tensor.randn(BS, 64).realize()
+        result = forward_step(x)
+        val = result.item()
+        step_results.append(val)
+        self.assertFalse(val != val, f"NaN at step {step}, acc {acc}")
+
+      # Combine (gradient accumulation)
+      total = sum(step_results)
+      self.assertFalse(total != total, f"NaN in step {step} total")
+
 if __name__ == '__main__':
   unittest.main()
