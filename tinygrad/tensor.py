@@ -286,21 +286,18 @@ class Tensor(OpMixin):
     return self
 
   def assign(self, x:Tensor|PyConst|list|tuple) -> Tensor:
-    # TODO: this is a hack for writing to DISK. remove with working assign
-    if isinstance(self.device, str) and self.device.startswith("DISK"):
-      if not isinstance(x, Tensor): x = Tensor(x, device="CPU", dtype=self.dtype)
-      self._buffer().copyin(x._data())
-      return self
-    if not isinstance(x, Tensor): x = Tensor(x, device=self.device, dtype=self.dtype)
+    # For DISK, keep source on default device (can't create data on DISK) and allow cross-device assign
+    is_disk = isinstance(self.device, str) and self.device.startswith("DISK")
+    if not isinstance(x, Tensor): x = Tensor(x, device=None if is_disk else self.device, dtype=self.dtype)
     if self.uop is x.uop: return self  # a self assign is a NOOP
-    # NOTE: we allow cross device assign
-    # broadcast x
     if least_upper_dtype(self.dtype, x.dtype) == self.dtype: x = x._broadcast_to(self.shape).cast(self.dtype)
     assert self.shape == x.shape, f"assign shape mismatch {self.shape} != {x.shape}"
-    assert self.device == x.device, f"assign device mismatch {self.device} != {x.device}"
+    if not is_disk: assert self.device == x.device, f"assign device mismatch {self.device} != {x.device}"
     assert self.dtype == x.dtype, f"assign dtype mismatch {self.dtype} != {x.dtype}"
     assert not isinstance(self.device, tuple) or self.uop.axis == x.uop.axis, f"multi assign axis mismatch {self.uop.axis} != {x.uop.axis}"
-    return self.replace(self._apply_uop(UOp.assign, x))
+    result = self.replace(self._apply_uop(UOp.assign, x))
+    if is_disk: result.realize()  # TODO: make disk assign lazy
+    return result
 
   def detach(self) -> Tensor:
     """
@@ -1279,11 +1276,10 @@ class Tensor(OpMixin):
     return self._getitem(indices)
 
   def __setitem__(self, indices, v:Tensor|PyConst|list|tuple) -> None:
-    if isinstance(self.device, str) and self.device.startswith("DISK"):
-      self.realize()._getitem(indices).assign(v)
-      return
     # NOTE: check that setitem target is valid first
-    if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
+    # For DISK, keep source on default device
+    is_disk = isinstance(self.device, str) and self.device.startswith("DISK")
+    if not isinstance(v, Tensor): v = Tensor(v, device=None if is_disk else self.device, dtype=self.dtype)
     if self.requires_grad or v.requires_grad: raise NotImplementedError("setitem with requires_grad is not supported")
     self.realize()
     if not self.uop.is_contiguous(): raise RuntimeError("setitem target needs to be contiguous")

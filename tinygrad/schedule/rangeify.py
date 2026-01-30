@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field, replace
 import itertools
-from tinygrad.dtype import dtypes, PtrDType, ImageDType, AddrSpace
+from tinygrad.dtype import DType, dtypes, PtrDType, ImageDType, AddrSpace
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, _substitute, KernelInfo
 from tinygrad.uop.ops import graph_rewrite, identity_element, sint, AxisType, BottomUpGate, Kernel, _remove_all_tags, range_str
 from tinygrad.uop.symbolic import symbolic
@@ -13,6 +13,8 @@ from tinygrad.schedule.indexing import run_rangeify, BufferizeOpts, ALWAYS_CONTI
 # creation can recurse a lot
 import sys
 sys.setrecursionlimit(10000)
+
+def _is_disk(device) -> bool: return isinstance(device, str) and device.startswith(("DISK", "TINYFS"))
 
 # movement op on INDEX as a PatternMatcher
 pm_mops = PatternMatcher([
@@ -126,10 +128,17 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # ** assign rules **
 
-  # assign only to buffer, otherwise make it a CONTIGUOUS
+  # DISK assign: make source contiguous first so it becomes a buffer that can be copied to DISK
+  # Exception: don't wrap if source is already COPY/CONTIGUOUS, or is a realized BUFFER on a compute device
+  (UPat(Ops.ASSIGN, src=(UPat.var("dest"), UPat.var("src")), name="assign"),
+   lambda dest,src,assign: assign.replace(src=(dest, src.contiguous())) \
+     if _is_disk(dest.device) and src.base.op not in {Ops.COPY, Ops.CONTIGUOUS} and not (src.base.op is Ops.BUFFER and not _is_disk(src.device)) \
+      else None),
+
+  # assign only to buffer, otherwise make it a CONTIGUOUS (exception: DISK assigns handled by late_disk_assign)
   (UPat(Ops.ASSIGN, src=(UPat(GroupOp.All-{Ops.BUFFER}, name="target"), UPat(name="x")), name="assign"),
    lambda x,target,assign: x.f(Ops.CONTIGUOUS, tag=assign.tag) if ((t:=target.base).op is not Ops.BUFFER and \
-       not (t.op is Ops.MSTACK and all(s.op is Ops.BUFFER for s in t.src))) else None),
+       not (t.op is Ops.MSTACK and all(s.op is Ops.BUFFER for s in t.src)) and not _is_disk(target.device)) else None),
 
    # make source contiguous if it has hazardous movement ops on the dest buffer
    (UPat(Ops.ASSIGN, src=(UPat.var("dest"), UPat.var("src")), name="assign"), fix_assign_hazard),
@@ -265,25 +274,32 @@ pm_remove_bufferize = PatternMatcher([
   (UPat.var("src").f(Ops.BUFFERIZE, allow_any_len=True, name="buf").f(Ops.INDEX, allow_any_len=True, name="idx"), remove_bufferize),
 ])
 
-def late_buffer_view(t:UOp, b:UOp):
-  if not (isinstance(b.device, str) and b.device.startswith(("DISK", "TINYFS"))): return b
-  shape = b.shape
+def _create_buffer_view(idx:UOp, dtype:DType, shape:tuple[sint, ...], tag) -> UOp:
   size = prod(shape)
+  offset = idx.src[1].arg if len(shape) == 0 else max(sum(i.vmin for i in idx.src[1:]), 0)
+  return UOp(Ops.BUFFER_VIEW, dtype, (idx.base,), (size, offset), tag=tag)
 
+def late_buffer_view(t:UOp, b:UOp):
+  if not _is_disk(b.device): return None
   # walk up for the INDEX
   x = t
   while not any(u.op is Ops.INDEX for u in x.src):
     assert x.op not in GroupOp.Elementwise, "can't buffer view elementwise"
     x = x.src[0]
   x = next(u for u in x.src if u.op is Ops.INDEX)
+  return b.replace(src=(_create_buffer_view(x, t.dtype, b.shape, b.tag),) + b.src[1:])
 
-  if len(shape) == 0: offset = x.src[1].arg
-  else: offset = max(sum(idx.vmin for idx in x.src[1:]), 0)
-
-  return b.replace(src=(UOp(Ops.BUFFER_VIEW, t.dtype, (x.base,), (size, offset), tag=t.tag),) + b.src[1:])
+def late_disk_assign(t:UOp, b:UOp):
+  if not _is_disk(b.device): return None
+  dest, src_val = t.src[0], t.src[1]
+  x = dest.src[0] if dest.op is Ops.BITCAST else dest  # handle BITCAST: dest is BITCAST(INDEX(...))
+  if x.op is not Ops.INDEX: return None
+  buffer_view = _create_buffer_view(x, t.dtype, b.shape, b.tag)
+  return b.replace(src=(UOp(Ops.COPY, t.dtype, (src_val, buffer_view), tag=b.tag),) + b.src[1:])
 
 to_bufferview = PatternMatcher([
   (UPat((Ops.BITCAST, Ops.CONTIGUOUS), name="t").f(Ops.BUFFERIZE, allow_any_len=True, name="b"), late_buffer_view),
+  (UPat(Ops.ASSIGN, name="t").f(Ops.BUFFERIZE, allow_any_len=True, name="b"), late_disk_assign),
   (UPat((Ops.BITCAST, Ops.CONTIGUOUS)).f(Ops.BUFFER_VIEW, name="b"), lambda b: b.replace(src=b.src[0].src)),
 ])
 

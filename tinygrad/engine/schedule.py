@@ -188,6 +188,12 @@ def complete_create_schedule_with_vars(big_sink:UOp) -> tuple[dict[UOp, UOp], li
       base = buf_uops[1].buffer
       assert isinstance(base, Buffer), "base can't be MultiBuffer"
       buffers[buf_uops[0]] = base.view(buf_uops[0].arg, si.ast.dtype, si.ast.arg[1]*base.dtype.itemsize)
+    # handle COPY with BUFFER_VIEW destination (DISK writes with offset)
+    elif si.ast.op is Ops.COPY and len(si.ast.src) > 1 and si.ast.src[1].op is Ops.BUFFER_VIEW:
+      bv = si.ast.src[1]
+      base = buf_uops[2].buffer
+      assert isinstance(base, Buffer), "base can't be MultiBuffer"
+      buffers[buf_uops[0]] = base.view(buf_uops[0].arg, bv.dtype, bv.arg[1]*base.dtype.itemsize)
     ubufs = tuple(b.buffer for b in buf_uops)
     if any(isinstance(x, MultiBuffer) for x in ubufs):
       assert all(isinstance(x, MultiBuffer) for x in ubufs), "kernel must all be multibuffer"
