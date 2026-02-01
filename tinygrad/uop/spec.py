@@ -117,8 +117,9 @@ _tensor_spec = PatternMatcher([
   (UPat(Ops.CONTIGUOUS, name="root", src=(UPat.var("x"),), allow_any_len=True, arg=None),
    lambda root,x: root.dtype == x.dtype and all(u.op is Ops.RANGE for u in root.src[1:])),
 
-  # COPY/ALLREDUCE/MULTI/ENCDEC
-  (UPat(Ops.COPY, name="copy", src=(UPat.var("x"), UPat(Ops.DEVICE)), arg=None), lambda copy,x: copy.dtype == x.dtype),
+  # COPY with DEVICE creates new buffer; COPY with BUFFER_VIEW writes to existing buffer (for DISK assign)
+  (UPat(Ops.COPY, name="copy", src=(UPat.var("x"), UPat((Ops.DEVICE, Ops.BUFFER_VIEW))), arg=None), lambda copy,x: copy.dtype == x.dtype),
+  # ALLREDUCE/MULTI/ENCDEC
   (UPat(Ops.ALLREDUCE, name="red", src=(UPat.var("x"), UPat(Ops.DEVICE))), lambda red,x: red.dtype == x.dtype and isinstance(red.arg, Ops)),
   (UPat(Ops.MULTI, name="multi"), lambda multi: all(x.dtype == multi.dtype for x in multi.src) and isinstance(multi.arg, int)),
   (UPat(Ops.ENCDEC, name="x"), lambda x: len(x.src) >= 2), # state + inbuffer

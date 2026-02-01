@@ -131,8 +131,11 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
    lambda target, src, assign: target.assign(src.bitcast(target.dtype)).replace(tag=assign.tag)),
 
   # assign only to buffer, otherwise make it a CONTIGUOUS
+  # DISK: if target not yet realized (base is COPY not BUFFER), realize it first via contiguous()
   (UPat(Ops.ASSIGN, src=(UPat(GroupOp.All-{Ops.BUFFER}, name="target"), UPat(name="x")), name="assign"),
-   lambda x,target,assign: x.f(Ops.CONTIGUOUS, tag=assign.tag) if ((t:=target.base).op is not Ops.BUFFER and \
+   lambda x,target,assign: target.contiguous().assign(x).rtag(assign.tag) \
+       if ((t:=target.base).op is not Ops.BUFFER and isinstance(t.device, str) and t.device.startswith("DISK")) \
+       else x.f(Ops.CONTIGUOUS, tag=assign.tag) if (t.op is not Ops.BUFFER and \
        not (t.op is Ops.MSTACK and all(s.op is Ops.BUFFER for s in t.src))) else None),
 
    # make source contiguous if it has hazardous movement ops on the dest buffer
@@ -333,10 +336,17 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
   if x.src[0].op is Ops.ASSIGN:
     assign_target, assign_src, assign_mops = x.src[0].src
     assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
+    target_buffer = assign_target.src[0]
+    # DISK: wrap source in COPY with target buffer view as dest (DISK can't run kernels, split_store will detect COPY)
+    if isinstance(target_buffer.device, str) and target_buffer.device.startswith("DISK"):
+      # compute offset from assign_target's ranges (like late_buffer_view)
+      offset = sum(idx.vmin for idx in assign_target.src[1:]) if len(assign_target.src) > 1 else 0
+      target_view = UOp(Ops.BUFFER_VIEW, x.dtype, (assign_target.base,), (size, offset))
+      assign_src = UOp(Ops.COPY, assign_src.dtype, (assign_src, target_view))
     # in assign, this is the buffer size, not the bufferize size
     # TODO: assign_mops here
     do_store = assign_target.replace(dtype=sdtype).store(assign_src, tag=x.tag).end(*rngs)
-    ret = assign_target.src[0].after(do_store)
+    ret = target_buffer.after(do_store)
     mops = []
     walk = assign_mops
     while walk is not assign_mops.base:

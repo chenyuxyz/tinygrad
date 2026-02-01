@@ -188,7 +188,14 @@ def complete_create_schedule_with_vars(big_sink:UOp) -> tuple[dict[UOp, UOp], li
       base = buf_uops[1].buffer
       assert isinstance(base, Buffer), "base can't be MultiBuffer"
       buffers[buf_uops[0]] = base.view(buf_uops[0].arg, si.ast.dtype, si.ast.arg[1]*base.dtype.itemsize)
-    ubufs = tuple(b.buffer for b in buf_uops)
+    ubufs = list(b.buffer for b in buf_uops)
+    # COPY to existing buffer view (for DISK assign): override destination to be a view (don't modify buffers dict)
+    if si.ast.op is Ops.COPY and si.ast.src[1].op is Ops.BUFFER_VIEW:
+      bv = si.ast.src[1]
+      base = ubufs[0]  # target buffer is first in ubufs for COPY
+      assert isinstance(base, Buffer), "base can't be MultiBuffer"
+      size, offset = bv.arg
+      ubufs[0] = base.view(size, si.ast.dtype, offset*base.dtype.itemsize)
     if any(isinstance(x, MultiBuffer) for x in ubufs):
       assert all(isinstance(x, MultiBuffer) for x in ubufs), "kernel must all be multibuffer"
       dnums = [x for x in si.ast.variables() if x.arg[0] == '_device_num']
