@@ -327,12 +327,23 @@ def reduce_to_acc(ctx:ReduceContext, red:UOp):
   if len(reduce_range) == 0: return ret
   return acc.after(acc.index(UOp.const(dtypes.int, 0)).store(ret).end(*reduce_range)).index(UOp.const(dtypes.int, 0))
 
+def merge_ends_for_same_range(sink: UOp):
+  """Merge ENDs that share the same range (can happen when multiple REDUCEs use the same range)."""
+  ends_by_range: dict[UOp, list[UOp]] = {}
+  for u in sink.toposort():
+    if u.op is Ops.END and len(u.src) > 1 and u.src[1].op is Ops.RANGE:
+      ends_by_range.setdefault(u.src[1], []).append(u)
+  subs = {e: UOp.group(*(e.src[0] for e in ends)).end(r) for r, ends in ends_by_range.items() if len(ends) > 1 for e in ends}
+  return sink.substitute(subs) if subs else None
+
 pm_reduce = PatternMatcher([
   # REDUCE -> DEFINE_ACC+ASSIGN
   (UPat(Ops.REDUCE, name="red"), reduce_to_acc),
   # tensor core built in accumulate
   (UPat(Ops.WMMA, name="wmma") + UPat.var("add"),
     lambda add, wmma: UOp(wmma.op, wmma.dtype, (wmma.src[0], wmma.src[1], wmma.src[2]+add), wmma.arg)),
+  # merge ENDs with same range (parallel reduces)
+  (UPat(Ops.SINK, name="sink"), merge_ends_for_same_range),
 ])
 
 # add loads
