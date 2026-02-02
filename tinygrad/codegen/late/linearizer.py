@@ -57,6 +57,13 @@ def linearize(sink:UOp) -> list[UOp]:
 
 class CFGContext:
   def __init__(self, sink:UOp):
+    # merge ENDs that share the same range (parallel reduces create multiple ENDs for same RANGE)
+    ends_by_range: dict[UOp, list[UOp]] = {}
+    for u in sink.toposort():
+      if u.op is Ops.END and len(u.src) > 1 and u.src[1].op is Ops.RANGE: ends_by_range.setdefault(u.src[1], []).append(u)
+    self.end_subs = {e: UOp.group(*(e.src[0] for e in ends)).end(r) for r, ends in ends_by_range.items() if len(ends) > 1 for e in ends}
+    if self.end_subs: sink = sink.substitute(self.end_subs)
+
     # there are 3 relationships between ranges:
     # nested, meaning endrange y is a dependency of endrange x and range x is a dependency of endrange y
     # dependent, meaning endrange y is a dependency of endrange x and range x is not a dependency of endrange y
@@ -86,6 +93,7 @@ class CFGContext:
         self.edges[y.src[1]] = x
 
 pm_add_control_flow = PatternMatcher([
+  (UPat(Ops.SINK, name="sink"), lambda ctx,sink: sink.substitute(ctx.end_subs) if ctx.end_subs else None),
   (UPat(Ops.RANGE, name="x"), lambda ctx,x: x.replace(src=x.src+(y,)) if (y:=ctx.edges.get(x)) is not None else None),
 ])
 
