@@ -4,7 +4,7 @@ from tinygrad import Tensor, Device, dtypes
 from tinygrad.device import is_dtype_supported
 from tinygrad.dtype import DType, DTYPES_DICT
 from tinygrad.nn.state import safe_load, safe_save, get_state_dict, torch_load
-from tinygrad.helpers import Timing, fetch, temp, OSX
+from tinygrad.helpers import Timing, fetch, temp, OSX, GlobalCounters
 from test.helpers import slow
 
 def compare_weights_both(url):
@@ -82,6 +82,29 @@ class TestRawDiskBuffer(unittest.TestCase):
       Tensor.empty((4,), dtype=dtypes.int8, requires_grad=True, device=f"DISK:{tmp}").bitcast(dtypes.float16)
 
     pathlib.Path(tmp).unlink()
+
+  def test_assign_kernel_count(self):
+    # DISK assign: 1 kernel (COPY) for realized buffer, 2 kernels (compute + COPY) for computed source
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+      f.write(bytes(16))
+      disk_path = f.name
+    disk_t = Tensor.empty(4, dtype=dtypes.float32, device=f"DISK:{disk_path}").realize()
+    # realized buffer source on CPU: 1 kernel (COPY to disk)
+    src = Tensor([1.0, 2.0, 3.0, 4.0], dtype=dtypes.float32, device="CPU").realize()
+    GlobalCounters.reset()
+    disk_t.assign(src)
+    self.assertEqual(GlobalCounters.kernel_count, 1)
+    # computed source: 2 kernels (compute on CPU + COPY to disk)
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+      f.write(bytes(16))
+      disk_path2 = f.name
+    disk_t2 = Tensor.empty(4, dtype=dtypes.float32, device=f"DISK:{disk_path2}").realize()
+    src2 = Tensor([1.0, 2.0, 3.0, 4.0], dtype=dtypes.float32, device="CPU").realize() + 1
+    GlobalCounters.reset()
+    disk_t2.assign(src2)
+    self.assertEqual(GlobalCounters.kernel_count, 2)
+    pathlib.Path(disk_path).unlink()
+    pathlib.Path(disk_path2).unlink()
 
 @unittest.skipUnless(is_dtype_supported(dtypes.uint8), "need uint8")
 class TestSafetensors(unittest.TestCase):

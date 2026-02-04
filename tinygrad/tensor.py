@@ -295,11 +295,8 @@ class Tensor(OpMixin):
     if not is_disk and self.device != x.device: raise RuntimeError(f"assign device mismatch {self.device} != {x.device}")
     if self.dtype != x.dtype: raise RuntimeError(f"assign dtype mismatch {self.dtype} != {x.dtype}")
     if isinstance(self.device, tuple) and self.uop.axis != x.uop.axis: raise RuntimeError(f"multi axis mismatch {self.uop.axis} != {x.uop.axis}")
-
-    # TODO: this is a hack for writing to DISK. remove with working assign
-    if is_disk:
-      self._buffer().copyin(x._data())
-      return self
+    # DISK: source must be contiguous (COPY needs realized buffer), assign is eager
+    if is_disk: return self.replace(self._apply_uop(UOp.assign, x.contiguous())).realize()
     return self.replace(self._apply_uop(UOp.assign, x))
 
   def detach(self) -> Tensor:
@@ -1281,11 +1278,9 @@ class Tensor(OpMixin):
     return self._getitem(indices)
 
   def __setitem__(self, indices, v:Tensor|PyConst|list|tuple) -> None:
-    if isinstance(self.device, str) and self.device.startswith("DISK"):
-      self.realize()._getitem(indices).assign(v)
-      return
     # NOTE: check that setitem target is valid first
-    if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
+    is_disk = isinstance(self.device, str) and self.device.startswith("DISK")
+    if not isinstance(v, Tensor): v = Tensor(v, device="CPU" if is_disk else self.device, dtype=self.dtype)
     if self.requires_grad or v.requires_grad: raise NotImplementedError("setitem with requires_grad is not supported")
     self.realize()
     if not self.uop.is_writable_view(): raise RuntimeError("setitem target must be a writable view backed by a buffer")
