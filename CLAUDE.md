@@ -122,10 +122,10 @@ Don't add complexity for marginal performance gains. Simpler code that's slightl
 ```python
 # BAD: "optimized" with extra complexity
 if has_afters:  # skip toposort if no AFTERs
-  after_map = [(u, u.buf_uop) for u in big_sink.toposort() if u.op is Ops.AFTER]
+  after_map = [(u, u.as_buf()) for u in big_sink.toposort() if u.op is Ops.AFTER]
 
 # GOOD: simple, always works
-after_map = [(u, u.buf_uop) for u in big_sink.toposort() if u.op is Ops.AFTER]
+after_map = [(u, u.as_buf()) for u in big_sink.toposort() if u.op is Ops.AFTER]
 ```
 The conditional check adds complexity, potential bugs, and often negligible speedup. Only optimize when profiling shows a real bottleneck.
 

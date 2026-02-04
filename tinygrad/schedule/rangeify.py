@@ -520,7 +520,7 @@ def split_store(ctx:list[UOp], x:UOp) -> UOp|None:
   kernel_arg = Kernel(ret,tuple(dedup(flatten([x for x in metadatas if x is not None])))[::-1])
   kernel = UOp(Ops.KERNEL, src=tuple(lctx.map.values())+tuple(lctx.vars.keys()), arg=kernel_arg)
   if ret.op is Ops.SINK and not all_same([x.device for x in kernel.src if x.op is not Ops.BIND]):
-    raise RuntimeError(f"all buffers must be on the same device: {tuple(b.buf_uop for b in kernel.src)}")
+    raise RuntimeError(f"all buffers must be on the same device: {tuple(b.as_buf() for b in kernel.src)}")
   return kernel
 
 split_kernels = PatternMatcher([
@@ -588,12 +588,12 @@ def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
   assign_rep: dict[UOp, UOp] = {}
   for u in tsink.toposort():
     if u.op is not Ops.AFTER: continue
-    kernel_assign[u.buf_uop] = u
+    kernel_assign[u.as_buf()] = u
     for s in u.src[1].src:
       # TODO: this is probably broken for MSELECT/MSTACK
-      if s.op is not Ops.BUFFER or s is u.buf_uop or (a:=kernel_assign.get(s)) is None: continue
-      if any(x.op is Ops.AFTER and x.buf_uop is s for x in u.toposort()):
-        raise RuntimeError(f"cycle detected in graph, kernel for {u.buf_uop} must either depend on AFTER or BUFFER")
+      if s.op is not Ops.BUFFER or s is u.as_buf() or (a:=kernel_assign.get(s)) is None: continue
+      if any(x.op is Ops.AFTER and x.as_buf() is s for x in u.toposort()):
+        raise RuntimeError(f"cycle detected in graph, kernel for {u.as_buf()} must either depend on AFTER or BUFFER")
       assign_rep[a] = kernel_assign[s] = a.replace(src=a.src+(u,))
   if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, name="fix_assign")
 

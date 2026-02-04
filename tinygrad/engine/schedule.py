@@ -59,7 +59,7 @@ def create_schedule(sched_sink:UOp) -> tuple[list[ExecItem], UOp]:
       if k.op is Ops.RANGE: schedule.append(k)
       elif k.op is Ops.KERNEL:
         ast = (kernel:=cast(Kernel, k.arg)).ast
-        buf_uops = tuple(_unwrap_src(s).buf_uop for s in k.src if s.op is not Ops.BIND)
+        buf_uops = tuple(_unwrap_src(s).as_buf() for s in k.src if s.op is not Ops.BIND)
         bound_ranges = tuple(s for s in k.src if s.op is Ops.BIND and len(s.src) > 1 and s.src[1].op is Ops.RANGE)
         schedule.append((ast, buf_uops, kernel.metadata, {}, bound_ranges))
         if rk.op is Ops.END: schedule.append(rk)
@@ -163,7 +163,7 @@ def complete_create_schedule_with_vars(big_sink:UOp) -> tuple[dict[UOp, UOp], li
     pre_schedule, buf_uops_sink = create_schedule(big_sink)
 
     # save in schedule cache (include AFTERs in tensor_map so we don't need big_sink)
-    after_map = [(u, u.buf_uop) for u in big_sink.toposort() if u.op is Ops.AFTER]
+    after_map = [(u, u.as_buf()) for u in big_sink.toposort() if u.op is Ops.AFTER]
     tensor_map_sink = UOp.sink(*flatten([(k,v) for k,v in tensor_map.items()]), *flatten(after_map))
     combined_sink = UOp.sink(tensor_map_sink, buf_uops_sink)
     if SCACHE: schedule_cache[sched_cache_key] = (pre_schedule, combined_sink)
