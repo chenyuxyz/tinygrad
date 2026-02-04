@@ -139,6 +139,38 @@ class TestVminVmaxProperties(unittest.TestCase):
     self.assertEqual(x_uint.vmin, dtypes.min(dtypes.uint))
     self.assertEqual(x_uint.vmax, dtypes.max(dtypes.uint))
 
+  def test_vmin_vmax_cast_bool_simplifiable(self):
+    # when source is definitely positive (vmin > 0), cast to bool is always True
+    x_positive = UOp.variable('x', 1, 10, dtypes.int)
+    x_bool = x_positive.cast(dtypes.bool)
+    self.assertEqual(x_bool.vmin, True)
+    self.assertEqual(x_bool.vmax, True)
+
+    # when source is definitely negative (vmax < 0), cast to bool is always True
+    x_negative = UOp.variable('x', -10, -1, dtypes.int)
+    x_bool = x_negative.cast(dtypes.bool)
+    self.assertEqual(x_bool.vmin, True)
+    self.assertEqual(x_bool.vmax, True)
+
+    # when source is definitely zero, cast to bool is always False
+    x_zero = UOp.const(dtypes.int, 0)
+    x_bool = x_zero.cast(dtypes.bool)
+    self.assertEqual(x_bool.vmin, False)
+    self.assertEqual(x_bool.vmax, False)
+
+  def test_vmin_vmax_cast_unsigned_simplifiable(self):
+    # when source is non-negative (vmin >= 0), cast to unsigned is monotone
+    x_nonneg = UOp.variable('x', 0, 100, dtypes.int)
+    x_uint = x_nonneg.cast(dtypes.uint)
+    self.assertEqual(x_uint.vmin, 0)
+    self.assertEqual(x_uint.vmax, 100)
+
+    # when source is definitely positive
+    x_positive = UOp.variable('x', 5, 50, dtypes.int)
+    x_uint = x_positive.cast(dtypes.uint)
+    self.assertEqual(x_uint.vmin, 5)
+    self.assertEqual(x_uint.vmax, 50)
+
   def test_vmin_vmax_invalid(self):
     i = UOp.invalid()
     self.assertNotEqual(i.vmin, i.vmax)

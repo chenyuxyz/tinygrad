@@ -778,9 +778,14 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
     if self.op is Ops.CONST and self.arg is not Invalid: return self.arg, self.arg
     if self.op is Ops.VCONST and Invalid not in self.arg: return (min(self.arg), max(self.arg))
     if self.op is Ops.GEP: return self.src[0]._min_max
-    # TODO: CAST to bool/unsigned is not monotone, still some case can be simplified
-    if self.op is Ops.CAST and self.dtype in dtypes.floats+dtypes.sints+(dtypes.index,):
-      return max(dtypes.min(self.dtype), self.src[0].vmin), min(self.src[0].vmax, dtypes.max(self.dtype))
+    if self.op is Ops.CAST:
+      s0_vmin, s0_vmax = self.src[0].vmin, self.src[0].vmax
+      if self.dtype == dtypes.bool:
+        if s0_vmin > 0 or s0_vmax < 0: return True, True  # definitely non-zero
+        if s0_vmin == s0_vmax: return s0_vmin != 0, s0_vmin != 0
+      # CAST to floats/sints/index is monotone; unsigned is monotone when source is non-negative
+      if self.dtype in dtypes.floats+dtypes.sints+(dtypes.index,) or (self.dtype in dtypes.uints and s0_vmin >= 0):
+        return max(dtypes.min(self.dtype), s0_vmin), min(s0_vmax, dtypes.max(self.dtype))
     return dtypes.min(self.dtype), dtypes.max(self.dtype)
 
   @functools.cached_property
