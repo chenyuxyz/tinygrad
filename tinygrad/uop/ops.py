@@ -668,11 +668,14 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
     if self.op not in (Ops.BUFFER, Ops.MSTACK): return None
     # LUNIQUEs are never realized
     if self.op_in_backward_slice_with_self(Ops.LUNIQUE): return None
+    # MSTACK requires all sources to be buffers
+    if self.op is Ops.MSTACK and not all(x.op is Ops.BUFFER for x in self.src): return None
     # NOTE: this is used by the JIT to determine which inputs we capture
     return self.buffer if self.buffer.is_allocated() else None
   @property
   def is_realized(self) -> bool:
-    return all(x.base.realized is not None for x in self.base.src) if self.base.op is Ops.MULTI else self.base.realized is not None
+    if self.op is Ops.MULTI: return all(x.is_realized for x in self.src)
+    return self.base.realized is not None
 
   # *** uop Variable stuff ***
 

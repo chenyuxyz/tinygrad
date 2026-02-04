@@ -175,6 +175,16 @@ class TestSchedule(unittest.TestCase):
     child.realize()
     assert a.uop.is_realized
 
+  def test_realize_view_skips_schedule(self):
+    # views of realized buffers should skip scheduling entirely
+    from unittest.mock import patch
+    t = Tensor.zeros((3, 3)).contiguous().realize()
+    v = t[1]  # view - is_realized but not is_contiguous
+    assert v.uop.is_realized
+    with patch("tinygrad.tensor.run_schedule") as rs:
+      v.realize()
+      rs.assert_not_called()
+
   # NOTE: because empty does not have a lowered ExecItem if realize is called on a childless empty, it never gets allocated.
   def test_childless_empty_never_allocates(self):
     a = Tensor.empty(10)
