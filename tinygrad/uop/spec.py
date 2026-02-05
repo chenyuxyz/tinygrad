@@ -54,10 +54,6 @@ shared_spec = PatternMatcher([
   (UPat(Ops.RANGE, src=(UPat.var("x"),), allow_any_len=True, name="rng"), lambda rng,x:
     rng.dtype == x.dtype and isinstance(rng.arg, tuple) and len(rng.arg) >= 2 and \
       all(isinstance(ra, int) for ra in rng.arg[0:-1]) and isinstance(rng.arg[-1], AxisType)),
-  (UPat(Ops.INDEX, src=(UPat(),), allow_any_len=True, name="x"), lambda x: all(y.dtype == dtypes.index for y in x.src[1:]) or None),
-
-  # RANGE/SPECIAL define loops, END closes them
-  (UPat(Ops.END, src=(UPat(), UPat(Ops.RANGE))), lambda: True),
 ])
 
 # ***** UOp spec in the Tensor graph *****
@@ -69,7 +65,6 @@ movement_ops = PatternMatcher([
 
   # inputs to movement ops
   (UPat((Ops.VECTORIZE, Ops.VCONST), dtype=dtypes.index), lambda: True),
-  (UPat({Ops.ADD, Ops.MUL, Ops.IDIV}, dtype=dtypes.index), lambda: True),
 
   # AFTER on Movement Op
   (UPat(Ops.AFTER, src=(UPat(GroupOp.Movement.union({Ops.MULTI, Ops.CONTIGUOUS})),), allow_any_len=True), lambda: True),
