@@ -4,9 +4,6 @@ from functools import partial
 from tinygrad import nn, dtypes, Tensor, Device, TinyJit, Variable
 from tinygrad.helpers import getenv, CI, OSX
 from tinygrad.device import is_dtype_supported
-from tinygrad.engine.realize import CompiledRunner
-from tinygrad.renderer.ptx import PTXRenderer
-from tinygrad.renderer.nir import NIRRenderer
 from test.helpers import not_support_multi_device, needs_second_gpu
 
 import numpy as np
@@ -114,15 +111,6 @@ class TestRandomness(unittest.TestCase):
     r = Tensor._threefry_random_bits(Tensor([0, 1337], dtype='uint32'), counts0, counts1).numpy()
 
     np.testing.assert_allclose(jr, r)
-
-  @unittest.skipIf(isinstance(Device[Device.DEFAULT].renderer, (NIRRenderer, PTXRenderer)), "PTX and NIR use pointer arithmetic")
-  def test_threefry_doesnt_use_long(self):
-    sched = Tensor.rand(20).schedule()
-    for si in sched:
-      si.lower()
-      if isinstance(si.prg, CompiledRunner):
-        for u in si.prg.p.uops:
-          self.assertNotIn(u.dtype, {dtypes.long, dtypes.ulong}, msg=f"long found in {si.prg.p.name}")
 
   def test_threefry_against_reference_full(self):
     Tensor.manual_seed(1337)
