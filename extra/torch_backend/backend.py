@@ -19,6 +19,7 @@ def _to_torch_device(device: str): return torch.device("tiny", int(device.partit
 import torch.utils.cpp_extension
 mod = torch.utils.cpp_extension.load(name="custom_device_extension", sources=[str(pathlib.Path(__file__).parent / "wrapped_tensor.cpp")])
 def calculate_storage_offset(x: Tensor) -> int:
+  if not x.uop.op_in_backward_slice_with_self(Ops.SHRINK): return 0
   offset = 0
   for u in x.uop.toposort():
     if u.op == Ops.SHRINK:
