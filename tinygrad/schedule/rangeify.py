@@ -35,7 +35,8 @@ pm_mops = PatternMatcher([
 
 def assign_to_contiguous(assign:UOp, target:UOp, src:UOp):
   if (t := target.base).op is Ops.BUFFER or (t.op is Ops.MSTACK and all(s.op is Ops.BUFFER for s in t.src)): return None
-  return src.f(Ops.CONTIGUOUS, tag=assign.tag)
+  if t.op in {Ops.COPY, Ops.ASSIGN, Ops.CONTIGUOUS, Ops.BUFFER_VIEW, Ops.ENCDEC}: return src.f(Ops.CONTIGUOUS, tag=assign.tag)
+  return src.replace(tag=assign.tag)
 
 def fix_assign_hazard(assign:UOp, target:UOp, src:UOp):
   # PERMUTE and FLIP reorder indices, SHRINK can have overlapping regions when dest is also shrunk
@@ -143,7 +144,7 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
   (UPat(Ops.ASSIGN, src=(UPat(Ops.BITCAST, src=(UPat(name="target"),)), UPat(name="src")), name="assign"),
    lambda assign, target, src: target.assign(src.bitcast(target.dtype)).replace(tag=assign.tag)),
 
-  # assign only to buffer, otherwise make it a CONTIGUOUS
+  # assign only to buffer, otherwise make it a CONTIGUOUS (or drop if target is pure compute)
   (UPat(Ops.ASSIGN, src=(UPat(GroupOp.All-{Ops.BUFFER}, name="target"), UPat(name="src")), name="assign"), assign_to_contiguous),
 
    # make source contiguous if it has hazardous movement ops on the dest buffer
