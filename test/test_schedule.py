@@ -373,6 +373,12 @@ class TestSchedule(unittest.TestCase):
     second = a.assign(b)
     check_schedule([first, second], 2) # TODO: 1?
 
+  def test_assign_to_non_buffer(self):
+    # assign to unrealized compute should drop the compute and just use the source (0 compute kernels)
+    a = Tensor([1, 2, 3]) + Tensor([2, 3, 4])
+    a.assign(Tensor([3, 4, 5]))
+    check_schedule(a, 0)
+
   # NOTE: this is causing "LAZYCACHE=1 incorrectly reuses contiguous const" #4562
   # should contiguous dedup?
   @unittest.skip("we do the exact opposite now")
