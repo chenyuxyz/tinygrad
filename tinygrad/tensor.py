@@ -24,6 +24,26 @@ def canonicalize_device(device:str|tuple|list|None) -> str|tuple[str, ...]:
 # *** all in scope Tensors are here. this gets relevant UOps ***
 
 all_tensors: dict[weakref.ref[Tensor], None] = {}
+# pending slice assigns: BUFFER UOp → list of Tensor objects with ASSIGN UOps targeting that buffer's views
+_pending_buffer_assigns: dict[UOp, list['Tensor']] = {}
+
+def _collect_pending_assigns(uops:list[UOp]) -> list['Tensor']:
+  """Transitively collect pending assigns for all BUFFERs reachable from uops."""
+  collected: list[Tensor] = []
+  seen_bufs: set[UOp] = set()
+  to_check = list(uops)
+  while to_check:
+    new_uops: list[UOp] = []
+    for uop in to_check:
+      for u in uop.toposort():
+        if u.op is Ops.BUFFER and u not in seen_bufs:
+          seen_bufs.add(u)
+          if u in _pending_buffer_assigns:
+            pending = _pending_buffer_assigns.pop(u)
+            collected.extend(pending)
+            new_uops.extend([t.uop for t in pending])
+    to_check = new_uops
+  return collected
 def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str) -> None:
   with cpu_profile(TracingKey(name), "TINY"):
     # get tensors in scope
@@ -271,8 +291,27 @@ class Tensor(OpMixin):
   @disable_gc()
   def realize(self, *lst:Tensor, do_update_stats=True) -> Tensor:
     """Triggers the computation needed to create these Tensor(s)."""
-    if len(to_realize:=[x for x in (self,)+lst if not x.uop.has_buffer_identity()]):
-      run_schedule(*Tensor.schedule_with_vars(*to_realize), do_update_stats=do_update_stats)
+    all_lst = list((self,)+lst)
+    # collect pending slice assigns for any buffers these tensors depend on
+    raw_dep_buffers: set[UOp]|None = None
+    if _pending_buffer_assigns:
+      pending = _collect_pending_assigns([x.uop for x in all_lst])
+      if pending:
+        raw_dep_buffers = set()
+        # check which pending assigns are truly orphan (not already reachable from initial graph)
+        initial_uops = {u for x in all_lst for u in x.uop.toposort()}
+        seen = {id(x) for x in all_lst}
+        for t in pending:
+          if t.uop not in initial_uops: raw_dep_buffers.add(t.uop.src[0].base)
+          if id(t) not in seen: all_lst.append(t)
+    if len(to_realize:=[x for x in all_lst if not x.uop.has_buffer_identity()]):
+      if raw_dep_buffers is not None:
+        big_sink = UOp.sink(*[x.uop for x in to_realize])
+        becomes_map, schedule, var_vals = complete_create_schedule_with_vars(big_sink, raw_dep_buffers=raw_dep_buffers)
+        _apply_map_to_tensors(becomes_map, name="Apply Schedule Map")
+        run_schedule(schedule, var_vals, do_update_stats=do_update_stats)
+      else:
+        run_schedule(*Tensor.schedule_with_vars(*to_realize), do_update_stats=do_update_stats)
     return self
 
   def replace(self, x:Tensor) -> Tensor:
@@ -299,7 +338,13 @@ class Tensor(OpMixin):
     if is_disk:
       self._buffer().copyin(x._data())
       return self
-    return self.replace(self._apply_uop(UOp.assign, x))
+    ret = self.replace(self._apply_uop(UOp.assign, x))
+    # track slice assigns: if the assign target is a view of a realized buffer, register for lazy scheduling
+    target = self.uop.src[0]
+    base_buf = target.base
+    if base_buf.op is Ops.BUFFER and not target.has_buffer_identity():
+      _pending_buffer_assigns.setdefault(base_buf, []).append(self)
+    return ret
 
   def detach(self) -> Tensor:
     """

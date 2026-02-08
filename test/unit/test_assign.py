@@ -415,7 +415,6 @@ class TestAssign(unittest.TestCase):
 
   # TODO: is there a way to sneak in a permute such that it returns the wrong answer?
 
-  @unittest.skip("this test is crashing!")
   def test_overlapping_shrink_assignment_forward(self):
     # Forward shift: read index > write index in overlap
     N = 100000
@@ -426,7 +425,6 @@ class TestAssign(unittest.TestCase):
     with Context(NOOPT=1): a[0:N-shift].assign(a[shift:N]).realize()
     np.testing.assert_allclose(a.numpy(), expected)
 
-  @unittest.skip("this test is crashing!")
   def test_overlapping_shrink_assignment_reverse(self):
     # Reverse shift: write index > read index in overlap
     N = 100000
@@ -437,7 +435,6 @@ class TestAssign(unittest.TestCase):
     with Context(NOOPT=1): a[shift:N].assign(a[0:N-shift]).realize()
     np.testing.assert_allclose(a.numpy(), expected)
 
-  @unittest.skip("this test is crashing!")
   def test_nonoverlapping_shrink_assignment(self):
     # TODO: non-overlapping shrinks don't actually need contiguous, could be 1 kernel with smarter range analysis
     a = Tensor.arange(100).float().contiguous().realize()
@@ -564,12 +561,6 @@ class TestAssignOrdering(unittest.TestCase):
     buf = Tensor.zeros(8).contiguous().realize()
     buf[0:4].assign(Tensor.ones(4))
     buf[2:6].assign(Tensor.ones(4) * 2)
-    np.testing.assert_equal(buf.numpy(), [0,0,0,0,0,0,0,0])  # TODO: wrong! should be [1,1,2,2,2,2,0,0]
-
-    # with .realize(): assigns execute in order
-    buf = Tensor.zeros(8).contiguous().realize()
-    buf[0:4].assign(Tensor.ones(4)).realize()
-    buf[2:6].assign(Tensor.ones(4) * 2).realize()
     np.testing.assert_equal(buf.numpy(), [1,1,2,2,2,2,0,0])
 
   def test_overlapping_slice_assigns_reverse(self):
@@ -578,12 +569,6 @@ class TestAssignOrdering(unittest.TestCase):
     buf = Tensor.zeros(8).contiguous().realize()
     buf[2:6].assign(Tensor.ones(4) * 2)
     buf[0:4].assign(Tensor.ones(4))
-    np.testing.assert_equal(buf.numpy(), [0,0,0,0,0,0,0,0])  # TODO: wrong! should be [1,1,1,1,2,2,0,0]
-
-    # with .realize(): assigns execute in order
-    buf = Tensor.zeros(8).contiguous().realize()
-    buf[2:6].assign(Tensor.ones(4) * 2).realize()
-    buf[0:4].assign(Tensor.ones(4)).realize()
     np.testing.assert_equal(buf.numpy(), [1,1,1,1,2,2,0,0])
 
   def test_read_between_writes(self):
@@ -622,11 +607,6 @@ class TestAssignOrdering(unittest.TestCase):
     # without .realize(): orphan slice assign not triggered by .numpy()
     buf = Tensor.zeros(4, dtype=dtypes.int32).contiguous().realize()
     buf[1:3].assign(Tensor([5, 6]))
-    np.testing.assert_equal(buf.numpy(), [0, 0, 0, 0])  # TODO: wrong! should be [0, 5, 6, 0]
-
-    # with .realize(): assign executes
-    buf = Tensor.zeros(4, dtype=dtypes.int32).contiguous().realize()
-    buf[1:3].assign(Tensor([5, 6])).realize()
     np.testing.assert_equal(buf.numpy(), [0, 5, 6, 0])
 
   def test_chained_slice_copies(self):
@@ -634,11 +614,6 @@ class TestAssignOrdering(unittest.TestCase):
     # without .realize(): orphan slice assign not triggered
     buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
     buf[4:8].assign(buf[0:4].contiguous())
-    np.testing.assert_equal(buf.numpy(), [1, 2, 3, 4, 5, 6, 7, 8])  # TODO: wrong! should be [1,2,3,4,1,2,3,4]
-
-    # with .realize(): assign executes
-    buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
-    buf[4:8].assign(buf[0:4].contiguous()).realize()
     np.testing.assert_equal(buf.numpy(), [1, 2, 3, 4, 1, 2, 3, 4])
 
   def test_swap_slices(self):
@@ -664,12 +639,6 @@ class TestAssignOrdering(unittest.TestCase):
     # without .realize(): orphan slice assign not triggered by reduction
     buf = Tensor.zeros(4, 4).contiguous().realize()
     buf[0:2, :].assign(Tensor.ones(2, 4))  # top half = 1
-    total = buf.sum()
-    self.assertEqual(total.item(), 0)  # TODO: wrong! should be 8 (2*4 ones)
-
-    # with .realize(): assign executes before reduction
-    buf = Tensor.zeros(4, 4).contiguous().realize()
-    buf[0:2, :].assign(Tensor.ones(2, 4)).realize()
     total = buf.sum()
     self.assertEqual(total.item(), 8)
 
@@ -735,20 +704,10 @@ class TestAssignOrdering(unittest.TestCase):
     """Variable-indexed slices - tests symbolic dependency tracking."""
     v_i = Variable("i", 0, 3)
 
-    # without .realize(): orphan slice assigns not triggered
     buf = Tensor.zeros(4, 4).contiguous().realize()
     buf[v_i.bind(0):v_i.bind(0)+1, :].assign(Tensor.ones(1, 4))
     row0_sum = buf[0:1, :].sum()
-    self.assertEqual(row0_sum.item(), 0)  # TODO: wrong! should be 4
-
-    # with .realize(): assigns execute
-    buf = Tensor.zeros(4, 4).contiguous().realize()
-    buf[v_i.bind(0):v_i.bind(0)+1, :].assign(Tensor.ones(1, 4)).realize()
-    row0_sum = buf[0:1, :].sum()
-    buf[v_i.bind(1):v_i.bind(1)+1, :].assign(Tensor.ones(1, 4) * 2).realize()
-    row1_sum = buf[1:2, :].sum()
     self.assertEqual(row0_sum.item(), 4)
-    self.assertEqual(row1_sum.item(), 8)
 
   def test_multiple_slice_assigns_then_read(self):
     """Multiple non-overlapping slice assigns then read - RAW dependencies must ensure all writes complete before read."""
@@ -756,12 +715,6 @@ class TestAssignOrdering(unittest.TestCase):
     buf[0:1].assign(Tensor.ones(1))
     buf[1:2].assign(Tensor.full((1,), 2.0))
     buf[2:3].assign(Tensor.full((1,), 3.0))
-    self.assertEqual(buf.sum().realize().item(), 0.0)  # TODO: wrong! should be 1 + 2 + 3 + 0 = 6
-
-    buf = Tensor.zeros(4).contiguous().realize()
-    buf[0:1].assign(Tensor.ones(1)).realize()
-    buf[1:2].assign(Tensor.full((1,), 2.0)).realize()
-    buf[2:3].assign(Tensor.full((1,), 3.0)).realize()
     self.assertEqual(buf.sum().realize().item(), 6.0)
 
 if __name__ == "__main__":

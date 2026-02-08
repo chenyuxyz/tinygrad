@@ -45,6 +45,11 @@ def create_schedule(sched_sink:UOp) -> tuple[list[ExecItem], UOp]:
             pass  # BUFFER is already realized, BIND is a bound variable (not a buffer dependency)
           case _:
             raise RuntimeError(f"input to kernel must be AFTER, BUFFER, MSELECT, MSTACK, or BIND, not {s.op}")
+      # handle extra AFTER dependencies (WAW/RAW from assign tracking in rangeify)
+      for dep in u.src[2:]:
+        if dep.op is Ops.AFTER and dep.src[1].op in {Ops.CALL, Ops.END} and dep.src[1] is not k:
+          children.setdefault(dep.src[1], []).append(k)
+          in_degree[k] += 1
 
   with cpu_profile(TracingKey("linearize schedule")):
     queue: deque[UOp] = deque(k for k,v in in_degree.items() if v == 0)
@@ -132,8 +137,8 @@ pm_post_sched_cache = PatternMatcher([
 ])
 
 schedule_cache: dict[bytes, tuple[list[ExecItem], UOp]] = {}
-@track_rewrites(lambda _,ret: f"Schedule {pluralize('Kernel', len(ret[1]))}")
-def complete_create_schedule_with_vars(big_sink:UOp) -> tuple[dict[UOp, UOp], list[ExecItem], dict[str, int]]:
+@track_rewrites(lambda _,ret,**kw: f"Schedule {pluralize('Kernel', len(ret[1]))}")
+def complete_create_schedule_with_vars(big_sink:UOp, raw_dep_buffers:set[UOp]|None=None) -> tuple[dict[UOp, UOp], list[ExecItem], dict[str, int]]:
   # big_sink srcs are all the Tensors
   st = time.perf_counter()
 
@@ -142,6 +147,9 @@ def complete_create_schedule_with_vars(big_sink:UOp) -> tuple[dict[UOp, UOp], li
   var_vals: dict[str, int] = {}
   big_sink_cache = graph_rewrite(big_sink, pm_pre_sched_cache, ctx=(input_buffers, var_vals), name="rewrite for sched cache")
   sched_cache_key = big_sink_cache.key
+
+  # map raw_dep_buffers through the UNIQUE→LUNIQUE transformation for rangeify
+  if raw_dep_buffers: raw_dep_buffers = {input_buffers.get(b, b) for b in raw_dep_buffers}
 
   if not SCACHE or (sc_ret:=schedule_cache.get(sched_cache_key, None)) is None:
     # verify Tensors match the spec (on big_sink, we only need to do this if cache misses)
@@ -158,7 +166,7 @@ def complete_create_schedule_with_vars(big_sink:UOp) -> tuple[dict[UOp, UOp], li
       big_sink_cache = big_sink_cache.substitute(tensor_map, name="Apply Multi Map")
       big_sink_cache = UOp.sink(*flatten([x.src if x.op is Ops.MULTI else [x] for x in big_sink_cache.src]))
 
-    tensor_map |= get_rangeify_map(big_sink_cache)
+    tensor_map |= get_rangeify_map(big_sink_cache, raw_dep_buffers=raw_dep_buffers)
     big_sink = big_sink_cache.substitute(tensor_map, name="Apply Kernelize Map")
 
     pre_schedule, buf_uops_sink = create_schedule(big_sink)
