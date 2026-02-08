@@ -124,7 +124,7 @@ class TestJitFootguns(unittest.TestCase):
       return cache.sum().realize()
     for i in range(4):
       cache.assign(Tensor.zeros(4, 4)).realize()
-      self.assertEqual(f_broken(v_pos.bind(i)).item(), 0.0)  # should be 4.0!
+      self.assertEqual(f_broken(v_pos.bind(i)).item(), 4.0)
 
     # workaround: add .realize() after assign
     cache2 = Tensor.zeros(4, 4).contiguous().realize()
