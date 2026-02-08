@@ -24,6 +24,26 @@ def canonicalize_device(device:str|tuple|list|None) -> str|tuple[str, ...]:
 # *** all in scope Tensors are here. this gets relevant UOps ***
 
 all_tensors: dict[weakref.ref[Tensor], None] = {}
+# pending slice assigns: BUFFER UOp → list of Tensor objects with ASSIGN UOps targeting that buffer's views
+_pending_buffer_assigns: dict[UOp, list['Tensor']] = {}
+
+def _collect_pending_assigns(uops:list[UOp]) -> list['Tensor']:
+  """Transitively collect pending assigns for all BUFFERs reachable from uops."""
+  collected: list[Tensor] = []
+  seen_bufs: set[UOp] = set()
+  to_check = list(uops)
+  while to_check:
+    new_uops: list[UOp] = []
+    for uop in to_check:
+      for u in uop.toposort():
+        if u.op is Ops.BUFFER and u not in seen_bufs:
+          seen_bufs.add(u)
+          if u in _pending_buffer_assigns:
+            pending = _pending_buffer_assigns.pop(u)
+            collected.extend(pending)
+            new_uops.extend([t.uop for t in pending])
+    to_check = new_uops
+  return collected
 def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str) -> None:
   with cpu_profile(TracingKey(name), "TINY"):
     # get tensors in scope
@@ -271,8 +291,27 @@ class Tensor(OpMixin):
   @disable_gc()
   def realize(self, *lst:Tensor, do_update_stats=True) -> Tensor:
     """Triggers the computation needed to create these Tensor(s)."""
-    if len(to_realize:=[x for x in (self,)+lst if not x.uop.has_buffer_identity()]):
-      run_schedule(*Tensor.schedule_with_vars(*to_realize), do_update_stats=do_update_stats)
+    all_lst = list((self,)+lst)
+    # collect pending slice assigns for any buffers these tensors depend on
+    raw_dep_buffers: set[UOp]|None = None
+    if _pending_buffer_assigns:
+      pending = _collect_pending_assigns([x.uop for x in all_lst])
+      if pending:
+        raw_dep_buffers = set()
+        # check which pending assigns are truly orphan (not already reachable from initial graph)
+        initial_uops = {u for x in all_lst for u in x.uop.toposort()}
+        seen = {id(x) for x in all_lst}
+        for t in pending:
+          if t.uop not in initial_uops: raw_dep_buffers.add(t.uop.src[0].base)
+          if id(t) not in seen: all_lst.append(t)
+    if len(to_realize:=[x for x in all_lst if not x.uop.has_buffer_identity()]):
+      if raw_dep_buffers is not None:
+        big_sink = UOp.sink(*[x.uop for x in to_realize])
+        becomes_map, schedule, var_vals = complete_create_schedule_with_vars(big_sink, raw_dep_buffers=raw_dep_buffers)
+        _apply_map_to_tensors(becomes_map, name="Apply Schedule Map")
+        run_schedule(schedule, var_vals, do_update_stats=do_update_stats)
+      else:
+        run_schedule(*Tensor.schedule_with_vars(*to_realize), do_update_stats=do_update_stats)
     return self
 
   def replace(self, x:Tensor) -> Tensor:
@@ -299,7 +338,13 @@ class Tensor(OpMixin):
     if is_disk:
       self._buffer().copyin(x._data())
       return self
-    return self.replace(self._apply_uop(UOp.assign, x))
+    target_uop = self.uop
+    ret = self.replace(self._apply_uop(UOp.assign, x))
+    # track slice assigns in pending (full-tensor assigns are accessible through self.uop)
+    if not target_uop.has_buffer_identity():
+      base_buf = target_uop.base
+      if base_buf.op is Ops.BUFFER: _pending_buffer_assigns.setdefault(base_buf, []).append(self)
+    return ret
 
   def detach(self) -> Tensor:
     """
@@ -1285,15 +1330,24 @@ class Tensor(OpMixin):
     # NOTE: check that setitem target is valid first
     if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
     if self.requires_grad or v.requires_grad: raise NotImplementedError("setitem with requires_grad is not supported")
-    self.realize()
+    # ensure target has a buffer to assign into (this doesn't force the assign itself)
+    if not self.uop.is_writable_view(): self.realize()
     if not self.uop.is_writable_view(): raise RuntimeError("setitem target must be a writable view backed by a buffer")
     res = self._getitem(indices, v)
     # if shapes match and data is not shared it's a copy and we assign to self
     if res.shape == self.shape and res.uop is not self.uop:
-      self.assign(res).realize()
+      assign_t = self._apply_uop(UOp.assign, res)
+      base_buf = self.uop.base
+      if base_buf.op is Ops.BUFFER: _pending_buffer_assigns.setdefault(base_buf, []).append(assign_t)
     else: # no copy, basic setitem
-      v = v.cast(res.dtype)._broadcast_to(_broadcast_shape(res.shape, v.shape)).contiguous()
-      res.assign(v).realize()
+      v = v.cast(res.dtype)._broadcast_to(_broadcast_shape(res.shape, v.shape))
+      # if __iadd__/__isub__ already assigned to the same view, skip redundant assign
+      if v.uop.op is Ops.ASSIGN and v.uop.src[0] is res.uop and (base_buf:=res.uop.base).op is Ops.BUFFER:
+        _pending_buffer_assigns.setdefault(base_buf, []).append(v)
+      else:
+        assign_t = res._apply_uop(UOp.assign, v.contiguous())
+        base_buf = res.uop.base
+        if base_buf.op is Ops.BUFFER: _pending_buffer_assigns.setdefault(base_buf, []).append(assign_t)
 
   def __delitem__(self, indices) -> None:
     raise TypeError("Tensor does not support deleting items")
@@ -3725,14 +3779,14 @@ class Tensor(OpMixin):
   def qr(self) -> tuple[Tensor, Tensor]:
     assert self.ndim > 1, f"expected two or more dimensions, got {self.ndim}"
     b_shape, m, n = self.shape[:-2], int(self.shape[-2]), int(self.shape[-1])
-    R = self.clone()
-    Q = Tensor.eye(m, dtype=self.dtype).reshape((1,) * len(b_shape) + (m, m)).expand(b_shape + (m, m)).contiguous()
+    R = self.clone().realize()
+    Q = Tensor.eye(m, dtype=self.dtype).reshape((1,) * len(b_shape) + (m, m)).expand(b_shape + (m, m)).contiguous().realize()
     for i in range(min(m, n)):
       x = R[..., i:m, i].contiguous()  # TODO: without contigous this can silently be wrong, should at least assert
       norm = x.square().sum(-1).sqrt()
       s = (x[..., 0] != 0).where(-x[..., 0].sign(), -1)
       u1 = x[..., 0] - s * norm
-      w = x.unsqueeze(-1) / (norm != 0).where(u1, 1).reshape(b_shape + (1, 1))
+      w = (x.unsqueeze(-1) / (norm != 0).where(u1, 1).reshape(b_shape + (1, 1))).realize()
       w[..., 0, 0] = 1
       tau = (-s * u1 / (norm != 0).where(norm, 1)).reshape(b_shape + (1, 1))
       tau = (norm != 0).reshape(b_shape + (1, 1)).where(tau, 0)
@@ -3750,7 +3804,8 @@ class Tensor(OpMixin):
     U = R.shrink(tuple([None] * len(b_shape) + [(0, num), (0, num)])).contiguous()
     V = Tensor.eye(num, dtype=self.dtype).reshape((1,) * len(b_shape) + (num, num)).expand(b_shape + (num, num)).contiguous()
     #prepare round robin pairing
-    permute, inverse_permute = Tensor.arange(0, num, dtype=dtypes.int), Tensor.zeros(num, dtype=dtypes.int).contiguous()
+    permute = Tensor.arange(0, num, dtype=dtypes.int).realize()
+    inverse_permute = Tensor.zeros(num, dtype=dtypes.int).contiguous().realize()
     permute[num//2:num] = permute[num//2:num].flip(0)
     inverse_permute[permute] = Tensor.arange(num, dtype=dtypes.int)
     def one_round_jacobi(U, V,permute,inverse_permute):
@@ -3786,7 +3841,7 @@ class Tensor(OpMixin):
     U = U.gather(-1, new_indices) / (S != 0).where(S, 1).unsqueeze(-2)
     V = V.gather(-1, new_indices)
 
-    padded_u = Tensor.eye(q_num, dtype=U.dtype).reshape((1,) * len(b_shape) + (q_num, q_num)).expand(b_shape + (q_num, q_num)).contiguous()
+    padded_u = Tensor.eye(q_num, dtype=U.dtype).reshape((1,) * len(b_shape) + (q_num, q_num)).expand(b_shape + (q_num, q_num)).contiguous().realize()
     padded_u[..., 0:num, 0:num] = U
     U = Q @ padded_u
     if not full_matrices: U, V = U[..., 0:num], V[..., 0:num]

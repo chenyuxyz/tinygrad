@@ -553,7 +553,7 @@ replace_contiguous = PatternMatcher([
   (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
 ])
 
-def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
+def get_rangeify_map(sink:UOp, raw_dep_buffers:set[UOp]|None=None) -> dict[UOp, UOp]:
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Input Graph")
   uop_list: list[UOp] = []
   tsink = graph_rewrite(sink, add_tags, ctx=(uop_list, set()), bottom_up=True, name="number the uops")
@@ -580,19 +580,57 @@ def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
                         name="bufferize to store")
   tsink = graph_rewrite(tsink, pm_gate_kernel_sink+split_kernels, ctx=uop_list, bottom_up=True, name="split kernels")
 
-  # if a kernel depends on a buffer, and that buffer is later assigned to, make the assign depend on the kernel's assign
-  kernel_assign: dict[UOp, UOp] = {}
-  assign_rep: dict[UOp, UOp] = {}
+  # dependency tracking for orphan slice assigns: WAW (write-after-write) and RAW (read-after-write)
+  _raw_dep = raw_dep_buffers or set()
+  if _raw_dep:
+    # WAW: chain writes to same buffer (ensures overlapping slice assigns execute in order)
+    kernel_assign: dict[UOp, UOp] = {}
+    assign_rep: dict[UOp, UOp] = {}
+    for u in tsink.toposort():
+      if u.op is not Ops.AFTER: continue
+      if (prev := kernel_assign.get(u.buf_uop)) is not None:
+        new_u = u.replace(src=u.src+(prev,))
+        assign_rep[u] = new_u
+        kernel_assign[u.buf_uop] = new_u
+      else:
+        kernel_assign[u.buf_uop] = u
+    if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, name="fix_waw")
+
+    # RAW: readers of pending-assign buffers depend on the latest writer
+    all_writers: dict[UOp, list[UOp]] = {}
+    for u in tsink.toposort():
+      if u.op is Ops.AFTER: all_writers.setdefault(u.buf_uop, []).append(u)
+    raw_rep: dict[UOp, UOp] = {}
+    for u in tsink.toposort():
+      if u.op is not Ops.AFTER: continue
+      k = u.src[1]
+      kernel_srcs = k.src[0].src[1:] if k.op is Ops.END else k.src[1:]
+      extra_deps: list[UOp] = []
+      for s in kernel_srcs:
+        if s.op is not Ops.BUFFER or s is u.buf_uop or s not in _raw_dep: continue
+        # try writers from most recent to oldest, pick the first that doesn't create a cycle
+        for a in reversed(all_writers.get(s, [])):
+          if u not in a.toposort():
+            extra_deps.append(a)
+            break
+      if extra_deps:
+        raw_rep[u] = u.replace(src=u.src+tuple(extra_deps))
+    if raw_rep: tsink = graph_rewrite(tsink, _substitute, ctx=raw_rep, bottom_up=True, name="fix_raw")
+
+  # WAR: if a kernel reads a buffer that is later written to, make the writer depend on the reader
+  kernel_assign2: dict[UOp, UOp] = {}
+  assign_rep2: dict[UOp, UOp] = {}
   for u in tsink.toposort():
     if u.op is not Ops.AFTER: continue
-    kernel_assign[u.buf_uop] = u
+    kernel_assign2[u.buf_uop] = u
     for s in u.src[1].src:
       # TODO: this is probably broken for MSELECT/MSTACK
-      if s.op is not Ops.BUFFER or s is u.buf_uop or (a:=kernel_assign.get(s)) is None: continue
+      if s.op is not Ops.BUFFER or s is u.buf_uop or s in _raw_dep or (a2:=kernel_assign2.get(s)) is None: continue
+      a = a2
       if any(x.op is Ops.AFTER and x.buf_uop is s for x in u.toposort()):
         raise RuntimeError(f"cycle detected in graph, kernel for {u.buf_uop} must either depend on AFTER or BUFFER")
-      assign_rep[a] = kernel_assign[s] = a.replace(src=a.src+(u,))
-  if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, name="fix_assign")
+      assign_rep2[a] = kernel_assign2[s] = a.replace(src=a.src+(u,))
+  if assign_rep2: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep2, bottom_up=True, name="fix_assign")
 
   # TODO: we can probably get this earlier
   sink_tags = [s.tag for s in tsink.src]

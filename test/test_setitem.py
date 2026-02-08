@@ -145,6 +145,7 @@ class TestSetitem(unittest.TestCase):
     @TinyJit
     def f(t:Tensor, a:Tensor):
       t[2:4, 3:5] = a
+      return t.realize()
 
     for i in range(1, 6):
       t = Tensor.zeros(6, 6).contiguous().realize()
