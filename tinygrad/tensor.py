@@ -1214,6 +1214,41 @@ class Tensor(OpMixin):
     x_dims = [p for p in indices_parsed if not isinstance(p['index'], sint)]
     x = x.reshape(tuple(p['size'] for p in x_dims))
 
+    # basic setitem: construct result with view region replaced by v using arange masks
+    if v is not None and not any(isinstance(p['index'], Tensor) for p in indices_parsed):
+      assert isinstance(v, Tensor)
+      vb = v.cast(self.dtype)._broadcast_to(x.shape)
+      # un-collapse int dims and remove None dims to get back to self.ndim
+      none_dims = [d for d, p in enumerate(i for i in indices_parsed if not isinstance(i['index'], sint)) if p['index'] is None]
+      for d in reversed(none_dims): vb = vb.squeeze(d)
+      int_dims = [d for d, p in enumerate(i for i in indices_parsed if i['index'] is not None) if isinstance(p['index'], sint)]
+      for d in int_dims: vb = vb.unsqueeze(d)
+      # un-stride: expand v elements back to fill stride gaps
+      for dim_idx, mop in enumerate(mops):
+        st = abs(mop['stride'])
+        if st == 1 or vb.shape[dim_idx] <= 1: continue
+        region_size = mop['boundary'][1] - mop['boundary'][0]
+        vb = vb.reshape(list(vb.shape[:dim_idx+1]) + [1] + list(vb.shape[dim_idx+1:]))
+        pads: list[tuple[int, int]] = [(0, 0)] * vb.ndim
+        pads[dim_idx + 1] = (0, st - 1)
+        vb = vb.pad(pads)
+        vb = vb.reshape(list(vb.shape[:dim_idx]) + [vb.shape[dim_idx]*vb.shape[dim_idx+1]] + list(vb.shape[dim_idx+2:]))
+        if vb.shape[dim_idx] > region_size: vb = vb.shrink(tuple((0, region_size) if i == dim_idx else (0, s) for i, s in enumerate(vb.shape)))
+      # un-flip and un-shrink (pad to self's shape)
+      vb = vb.flip(tuple(i for i, m in enumerate(mops) if m['stride'] < 0))
+      vb = vb.pad(tuple((s, self.shape[i] - e) for i, (s, e) in enumerate(m['boundary'] for m in mops)))
+      # build boolean mask from index bounds/strides
+      per_dim = []
+      for dim_idx, mop in enumerate(mops):
+        s, e = mop['boundary']
+        st = abs(mop['stride'])
+        idx = Tensor.arange(self.shape[dim_idx], device=self.device)
+        dim_mask = (idx >= s) & (idx < e)
+        if st != 1: dim_mask = dim_mask & (((e - 1 - idx) if mop['stride'] < 0 else (idx - s)) % st == 0)
+        per_dim.append(dim_mask.reshape([1]*dim_idx + [self.shape[dim_idx]] + [1]*(self.ndim - dim_idx - 1)))
+      bmask = functools.reduce(lambda a, b: a & b, per_dim) if per_dim else Tensor(True, dtype=dtypes.bool, device=self.device)
+      return bmask.where(vb, self)
+
     # tensor indexing
     if tops := [(d, p) for d, p in enumerate(x_dims) if isinstance(p['index'], Tensor)]:
       dims, tensors, masks = [d for d, _ in tops], cast(list[Tensor], [p['index'] for _, p in tops]), []
@@ -1311,8 +1346,15 @@ class Tensor(OpMixin):
       self.assign(self._getitem(indices, v))
     else: # basic setitem
       if is_disk: self[indices].assign(v)
+      elif self.uop.base.op is not Ops.BUFFER:
+        if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
+        # __iadd__/__isub__ on unrealized views creates a no-op ASSIGN; unwrap to get the computed value
+        if v.uop.op is Ops.ASSIGN: v = v._apply_uop(lambda x: x.src[1])
+        self.replace(self._getitem(indices, v))
       else:
-        self[indices].assign(v).realize()
+        view = self[indices]
+        if view.uop.has_buffer_identity(): self.assign(v)
+        else: view.assign(v)
 
   def __delitem__(self, indices) -> None:
     raise TypeError("Tensor does not support deleting items")
