@@ -71,7 +71,7 @@ class TestSetitem(unittest.TestCase):
 
   def test_setitem_into_noncontiguous(self):
     t = Tensor.ones(4)
-    with self.assertRaises(RuntimeError): t[1] = 5
+    with self.assertRaises(RuntimeError): t[1].assign(5).realize()
 
   def test_setitem_chained_indexing(self):
     # N[i][j] must work the same as N[i, j]
@@ -162,6 +162,7 @@ class TestSetitem(unittest.TestCase):
     @TinyJit
     def f(t:Tensor, a:Tensor):
       t[2:4, 3:5] = a
+      t.realize() # TODO: can we detect this?
 
     for i in range(1, 6):
       t = Tensor.zeros(6, 6).contiguous().realize()

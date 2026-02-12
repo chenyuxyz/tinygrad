@@ -1258,6 +1258,31 @@ class Tensor(OpMixin):
         for dim in sum_axis: vb = vb.unsqueeze(dim)
         # run _masked_setitem on tuple of axis that is to be reduced to match self.shape
         x = _masked_setitem(self, vb, mask, tuple(range((start := dims[0] if not permuted else 0), start + len(big_shape))))
+    elif v is not None:
+      # basic setitem: return whole tensor with indexed region replaced by v
+      vb = v.cast(self.dtype)._broadcast_to(_broadcast_shape(x.shape, v.shape))
+      mops = [ip for ip in indices_parsed if ip['index'] is not None]
+      # undo reshape: swap None dims (in x) for int dims (size 1, in self)
+      vb = vb.reshape(tuple(1 if isinstance(ip['index'], sint) else ip['size'] for ip in mops))
+      mask = Tensor.ones(vb.shape, dtype=dtypes.bool, device=self.device)
+      shrinks = tuple(ip['boundary'] for ip in mops)
+      strides_abs = tuple(abs(ip['stride']) for ip in mops)
+      # undo stride: scatter values back to full region
+      if any(st != 1 for st in strides_abs):
+        region_sizes = tuple(hi - lo for lo, hi in shrinks)
+        vb = vb.reshape(tuple(flatten((s, 1) for s in vb.shape)))
+        mask = mask.reshape(tuple(flatten((s, 1) for s in mask.shape)))
+        stride_pad = tuple(p for st in strides_abs for p in ((0, 0), (0, st - 1)))
+        vb, mask = vb.pad(stride_pad), mask.pad(stride_pad)
+        vb = vb.reshape(tuple(a * b for a, b in zip(vb.shape[::2], vb.shape[1::2])))
+        mask = mask.reshape(tuple(a * b for a, b in zip(mask.shape[::2], mask.shape[1::2])))
+        vb, mask = vb.shrink(tuple((0, rs) for rs in region_sizes)), mask.shrink(tuple((0, rs) for rs in region_sizes))
+      # undo flip
+      flip_dims = tuple(i for i, ip in enumerate(mops) if ip['stride'] < 0)
+      if flip_dims: vb, mask = vb.flip(flip_dims), mask.flip(flip_dims)
+      # undo shrink: pad to self.shape
+      pad_back = tuple((lo, self.shape[i] - hi) for i, (lo, hi) in enumerate(shrinks))
+      x = mask.pad(pad_back).where(vb.pad(pad_back), self)
 
     return x
 
@@ -1306,14 +1331,20 @@ class Tensor(OpMixin):
     if self.requires_grad or (isinstance(v, Tensor) and v.requires_grad): raise NotImplementedError("setitem with requires_grad is not supported")
     idx = [indices] if (isinstance(indices, list) and all_int(indices)) or not isinstance(indices, (tuple, list)) else list(indices)
     is_disk = isinstance(self.device, str) and self.device.startswith("DISK")
-    if any(isinstance(i, (Tensor, list, tuple)) for i in idx): # advanced setitem
-      if is_disk: raise RuntimeError("advanced setitem is not supported for DISK tensors")
+    if is_disk:
+      if any(isinstance(i, (Tensor, list, tuple)) for i in idx): raise RuntimeError("advanced setitem is not supported for DISK tensors")
+      self[indices].assign(v)
+    else:
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
+      # strip ASSIGN from v (e.g. from __iadd__) since we'll create our own via self.assign()
+      if v.uop.op is Ops.ASSIGN:
+        assign_uop = v.uop
+        v.uop = assign_uop.src[1]
+        # remove the now-redundant pending assign if it was tracked
+        if (buf:=assign_uop.src[0].base) in _pending_assigns and assign_uop in _pending_assigns[buf]: _pending_assigns[buf].remove(assign_uop)
+      # resolve pending ASSIGN before chaining another setitem on the same buffer
+      if self.uop.op is Ops.ASSIGN: self.realize()
       self.assign(self._getitem(indices, v))
-    else: # basic setitem
-      if is_disk: self[indices].assign(v)
-      else:
-        self[indices].assign(v).realize()
 
   def __delitem__(self, indices) -> None:
     raise TypeError("Tensor does not support deleting items")
