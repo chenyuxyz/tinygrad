@@ -61,9 +61,30 @@ def fix_assign_hazard(assign:UOp, target:UOp, src:UOp):
     if any(s is target.base for s in h.toposort(gate=lambda s:s.op not in ALWAYS_CONTIGUOUS-{Ops.PARAM})):
       return assign.replace(src=(target, src.contiguous()))
 
+def _get_const_value(u:UOp):
+  """Get constant value from a UOp, traversing through casts/reshapes/expands. Returns None if not a constant."""
+  while u.op in {Ops.CAST, Ops.EXPAND, Ops.RESHAPE}: u = u.src[0]
+  return u.arg if u.op is Ops.CONST else None
+
+def _is_sparse_gather(x:UOp, reduce_axes:tuple[int, ...]) -> bool:
+  """Check if WHERE pattern is a sparse gather (data is expanded in non-reduce dims)."""
+  if x.op is not Ops.WHERE: return False
+  # For sparse gathers, the true branch (data) is EXPAND in the non-reduce dimensions
+  data = x.src[1]
+  while data.op in {Ops.CAST, Ops.RESHAPE}: data = data.src[0]
+  if data.op is not Ops.EXPAND: return False
+  # Check that the expand is in non-reduce dimensions (source shape has 1s there)
+  src_shape, dst_shape = data.src[0].shape, data.shape
+  for i, (ss, ds) in enumerate(zip(src_shape, dst_shape)):
+    if i not in reduce_axes and ss != ds: return True  # expanded in non-reduce dim
+  return False
+
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
   if not SPLIT_REDUCEOP or not all_int(x.shape) or (prod(x.shape)//prod(reduce.shape))<getenv("REDUCEOP_SPLIT_THRESHOLD", 32768): return None
+  # don't split sparse gathers: WHERE(cond, data, identity).reduce() where data is expanded (one value per reduce axis)
+  if x.op is Ops.WHERE and (false_val := _get_const_value(x.src[2])) is not None:
+    if false_val == identity_element(reduce.arg[0], x.dtype) and _is_sparse_gather(x, reduce.arg[1]): return None
   # if there are few globals, make some reduces into globals by splitting into two kernels
   # cap output buffer to 2**22: heuristic number of global outputs to achieve max occupancy with enough locals+upcasts for gemm
   #   ~2**10 should be enough if GROUP is used
