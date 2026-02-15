@@ -100,9 +100,9 @@ def full_rewrite_to_sink(sink:UOp, ren:Renderer|None=None, optimize:bool=True) -
   sink = graph_rewrite(sink, pm_transcendental, ctx=ren.device, name="transcendental")
 
   # final rules for the renderer (without sym)
-  extra_matcher = ren.extra_matcher if ren.extra_matcher is not None else PatternMatcher([])
-  pm_final_rewrite = pm_decomp+pm_render+extra_matcher+pm_split_ends
+  pm_final_rewrite = pm_decomp+pm_render+pm_split_ends
   sink = graph_rewrite(sink, pm_final_rewrite, ctx=ren.device, name="final rewrite")
+  if ren.extra_matcher is not None: sink = graph_rewrite(sink, ren.extra_matcher, ctx=ren.device, name="renderer extra")
 
   # this was the linearizer
   sink = graph_rewrite(sink, pm_add_control_flow, ctx=CFGContext(sink), name="add control flow", bottom_up=True)
