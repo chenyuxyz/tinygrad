@@ -51,9 +51,7 @@ class TestAssign(unittest.TestCase):
     x += 1
     x.realize()
     assert x.item() == 2
-    # TODO: both assigns should write to the original buffer, not create a new one
-    with self.assertRaises(AssertionError):
-      assert x.uop.base.realized is buf
+    assert x.uop.base.realized is buf
 
   def test_assign_slice_add(self):
     x = Tensor([0, 0]).realize()
