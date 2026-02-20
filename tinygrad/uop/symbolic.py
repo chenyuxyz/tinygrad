@@ -368,6 +368,19 @@ pm_move_where_on_load = PatternMatcher([
 def gated_given_valid(cond:UOp, x:UOp, i:UOp) -> UOp|None:
   # Skip if x contains DIV/MOD AND IMAGE mode is enabled -> image index e.g. openpilot
   if IMAGE.value > 0 and x.op_in_backward_slice_with_self(Ops.IDIV, Ops.MOD): return None
+  # try to pin RANGE variables to a single value by testing extremes against constraints
+  existing = set(cond.split_uop(Ops.AND))
+  for stmt in list(existing):
+    if (res:=parse_valid(stmt)) is None: continue
+    expr, is_upper, c = res
+    for r in [u for u in expr.toposort() if u.op is Ops.RANGE and u.vmin + 1 == u.vmax]:
+      for extreme in [r.vmin, r.vmax]:
+        sub_expr = expr.substitute({r: r.const_like(extreme)}).simplify()
+        if (sub_expr.vmin > c if is_upper else sub_expr.vmax < c):
+          clause = (r < (extreme + 1)).ne(True) if extreme == r.vmin else r < extreme
+          if clause not in existing:
+            cond = cond & clause
+            existing.add(clause)
   return cond.where(uop_given_valid(cond, x, try_simplex=False), i)
 
 # TODO: this is O(number of WHERE * number of node)
