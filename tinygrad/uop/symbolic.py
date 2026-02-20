@@ -3,7 +3,7 @@ import math, operator, struct, functools
 from collections import defaultdict
 from tinygrad.uop.ops import Ops, PatternMatcher, UPat, UOp, GroupOp, exec_alu
 from tinygrad.dtype import ConstType, dtypes, PtrDType, can_lossless_cast, Invalid
-from tinygrad.helpers import partition, all_same, prod, flatten, get_single_element, unwrap, IMAGE, dedup
+from tinygrad.helpers import partition, all_same, prod, flatten, get_single_element, unwrap, IMAGE, dedup, Z3
 from tinygrad.uop.decompositions import xpow
 from tinygrad.uop.divandmod import div_and_mod_symbolic
 
@@ -315,12 +315,209 @@ def uop_given_valid(valid:UOp, uop:UOp, try_simplex=True) -> UOp:
     uop = s_uop.simplify().substitute({newX:X for X,newX in sub_dict.items()}).simplify()
   return uop
 
+# ===== z3-based simplification (enabled with Z3=1) =====
+
+def _z3_constify(expr:UOp, under:UOp) -> UOp:
+  """Replace subexpressions of expr that are provably constant when `under` is true."""
+  import z3
+  from tinygrad.uop.validate import uops_to_z3
+  all_nodes = list(expr.toposort())
+  subexprs = [u for u in all_nodes if u.op != Ops.CONST and u.dtype.scalar() in (dtypes.index, dtypes.int, dtypes.bool)]
+  if not subexprs: return expr
+  solver = z3.Solver(ctx=z3.Context())
+  solver.set("timeout", 1000)
+  z3_all = uops_to_z3(solver, under, *subexprs)
+  z3_under, z3_subs = z3_all[0], z3_all[1:]
+  solver.add(z3_under)
+  replacements: dict[UOp, UOp] = {}
+  for uop, z3_expr in zip(subexprs, z3_subs):
+    if any(p in replacements for p in uop.toposort() if p is not uop): continue
+    if uop.dtype == dtypes.bool:
+      for val in [True, False]:
+        if solver.check(z3_expr != z3.BoolVal(val, ctx=solver.ctx)) == z3.unsat:
+          replacements[uop] = UOp.const(dtypes.bool, val); break
+    else:
+      if solver.check() == z3.sat:
+        val = solver.model().eval(z3_expr, model_completion=True).as_long()
+        if solver.check(z3_expr != val) == z3.unsat:
+          replacements[uop] = UOp.const(uop.dtype, val)
+  return expr.substitute(replacements).simplify() if replacements else expr
+
+def _solve_int_linear(A:list, b:list) -> list[int]|None:
+  """Solve Ax=b for integer x via Gaussian elimination with exact fractions."""
+  n, m = len(A), len(A[0])
+  aug = [row + [bi] for row, bi in zip(A, b)]
+  for col in range(m):
+    pivot = next((row for row in range(col, n) if aug[row][col] != 0), None)
+    if pivot is None: return None
+    aug[col], aug[pivot] = aug[pivot], aug[col]
+    for row in range(n):
+      if row != col and aug[row][col] != 0:
+        factor = aug[row][col] / aug[col][col]
+        for j in range(m + 1): aug[row][j] -= factor * aug[col][j]
+  result = []
+  for i in range(m):
+    if aug[i][i] == 0: return None
+    val = aug[i][m] / aug[i][i]
+    if val.denominator != 1: return None
+    result.append(int(val))
+  return result
+
+def _z3_linear_synth(idx:UOp, valid:UOp) -> UOp|None:
+  """Try to find a linear combination of variables equivalent to idx under valid."""
+  import z3
+  from fractions import Fraction
+  from tinygrad.uop.validate import uops_to_z3
+  seen: set[UOp] = set()
+  idx_vars = [u for u in idx.toposort() if u.op in (Ops.SPECIAL, Ops.RANGE, Ops.DEFINE_VAR) and u not in seen and not seen.add(u)]
+  if not idx_vars: return None
+  n = len(idx_vars)
+  solver = z3.Solver(ctx=z3.Context())
+  solver.set("timeout", 1000)
+  z3_all = uops_to_z3(solver, valid, idx, *idx_vars)
+  z3_valid, z3_idx, z3_vars = z3_all[0], z3_all[1], z3_all[2:]
+  solver.add(z3_valid)
+  samples: list[tuple[list[int], int]] = []
+  for _ in range(n + 2):
+    if solver.check() != z3.sat: break
+    model = solver.model()
+    var_vals = [model.eval(zv, model_completion=True).as_long() for zv in z3_vars]
+    idx_val = model.eval(z3_idx, model_completion=True).as_long()
+    samples.append((var_vals, idx_val))
+    solver.add(z3.Or(*[zv != model.eval(zv, model_completion=True) for zv in z3_vars]))
+  if len(samples) < n + 1: return None
+  A = [[Fraction(1)] + [Fraction(v) for v in vv] for vv, _ in samples[:n+1]]
+  b = [Fraction(iv) for _, iv in samples[:n+1]]
+  coeffs = _solve_int_linear(A, b)
+  if coeffs is None: return None
+  for vv, iv in samples[n+1:]:
+    if coeffs[0] + sum(c*v for c,v in zip(coeffs[1:], vv)) != iv: return None
+  terms: list[UOp] = []
+  if coeffs[0] != 0: terms.append(UOp.const(dtypes.index, coeffs[0]))
+  for v, c in zip(idx_vars, coeffs[1:]):
+    if c == 0: continue
+    terms.append(v if c == 1 else v * c)
+  result = terms[0] if terms else UOp.const(dtypes.index, 0)
+  for t in terms[1:]: result = result + t
+  result = result.simplify()
+  # verify with z3
+  solver2 = z3.Solver(ctx=z3.Context())
+  solver2.set("timeout", 1000)
+  z3_res = uops_to_z3(solver2, valid, idx, result)
+  solver2.add(z3_res[0])
+  if solver2.check(z3_res[1] != z3_res[2]) != z3.unsat: return None
+  return result
+
+def _z3_resynth_valid(valid:UOp) -> UOp:
+  """Try to find a simpler boolean expression equivalent to valid."""
+  import z3
+  from tinygrad.uop.validate import uops_to_z3
+  all_vars = sorted([u for u in valid.toposort() if u.op in (Ops.SPECIAL, Ops.RANGE, Ops.DEFINE_VAR)], key=lambda u: u.render())
+  if len(all_vars) > 4: return valid  # too many variables to search
+  def _equiv(a:UOp, b:UOp) -> bool:
+    s = z3.Solver(ctx=z3.Context())
+    s.set("timeout", 500)
+    r = uops_to_z3(s, a, b)
+    return s.check(r[0] != r[1]) == z3.unsat
+  # single variable: try v < c and v >= c for small ranges
+  for v in all_vars:
+    lo, hi = int(v.vmin), int(v.vmax)
+    if hi - lo > 16: continue
+    for c in range(lo + 1, hi + 2):
+      if _equiv(valid, v < c): return v < c
+      if _equiv(valid, (v < c).ne(True)): return (v < c).ne(True)
+  # two variables: only for very small ranges
+  if len(all_vars) <= 3:
+    for i, v1 in enumerate(all_vars):
+      if int(v1.vmax) - int(v1.vmin) > 8: continue
+      for j, v2 in enumerate(all_vars):
+        if j <= i: continue
+        if int(v2.vmax) - int(v2.vmin) > 8: continue
+        for c1 in range(int(v1.vmin) + 1, int(v1.vmax) + 2):
+          for c2 in range(int(v2.vmin) + 1, int(v2.vmax) + 2):
+            for cand1 in [v1 < c1, (v1 < c1).ne(True)]:
+              for cand2 in [v2 < c2, (v2 < c2).ne(True)]:
+                if _equiv(valid, cand1 & cand2): return cand1 & cand2
+  return valid
+
+def _z3_simplify_valid_core(valid:UOp) -> UOp:
+  """z3-based simplification of valid expression."""
+  import z3
+  from tinygrad.uop.validate import uops_to_z3
+  # check unsatisfiable
+  solver = z3.Solver(ctx=z3.Context())
+  solver.set("timeout", 1000)
+  z3_valid, = uops_to_z3(solver, valid)
+  solver.add(z3_valid)
+  if solver.check() == z3.unsat: return UOp.const(dtypes.bool, False)
+  clauses = list(valid.split_uop(Ops.AND))
+  if len(clauses) <= 1: return valid
+  # iteratively constify each clause given the others
+  for _ in range(3):
+    changed = False
+    for i in range(len(clauses)):
+      others = [c for j, c in enumerate(clauses) if j != i]
+      given = others[0]
+      for o in others[1:]: given = given & o
+      new_clause = _z3_constify(clauses[i], given)
+      if new_clause is not clauses[i]: clauses[i] = new_clause; changed = True
+    if not changed: break
+  # drop constant True/False clauses
+  kept: list[UOp] = []
+  for c in clauses:
+    if c.op is Ops.CONST and c.arg is True: continue
+    if c.op is Ops.CONST and c.arg is False: return UOp.const(dtypes.bool, False)
+    kept.append(c)
+  if not kept: return UOp.const(dtypes.bool, True)
+  # drop clauses implied by the others
+  final: list[UOp] = []
+  for i, clause in enumerate(kept):
+    without = [kept[j] for j in range(len(kept)) if j != i]
+    if without:
+      without_valid = without[0]
+      for o in without[1:]: without_valid = without_valid & o
+      s = z3.Solver(ctx=z3.Context())
+      s.set("timeout", 1000)
+      z3_res = uops_to_z3(s, without_valid, clause)
+      s.add(z3_res[0])
+      if s.check(z3.Not(z3_res[1])) == z3.unsat: continue
+    final.append(clause)
+  if not final: return UOp.const(dtypes.bool, True)
+  result = final[0]
+  for f in final[1:]: result = result & f
+  return result
+
+def _z3_simplify_valid_fn(valid:UOp) -> UOp|None:
+  """z3-based simplification of valid expression (replaces simplify_valid when Z3=1)."""
+  # phase 1: z3-based clause simplification (constify + drop implied)
+  new_valid = _z3_simplify_valid_core(valid)
+  # phase 2: bound-based clause simplification (uop_given_valid on each clause given the others)
+  clauses = list(new_valid.split_uop(Ops.AND))
+  clauses = sorted(clauses, key=lambda v: _valid_priority(v, clauses))
+  ret: list[UOp] = []
+  for stmt in dedup(clauses):
+    if ret: stmt = uop_given_valid(UOp.prod(*ret), stmt)
+    ret.append(stmt)
+  if ret != clauses: new_valid = UOp.prod(*ret)
+  # phase 3: valid resynthesis if still has div/mod
+  if new_valid.op is not Ops.CONST and any(u.op in (Ops.IDIV, Ops.MOD) for u in new_valid.toposort()):
+    resynth = _z3_resynth_valid(new_valid)
+    if resynth is not new_valid: new_valid = resynth
+  return new_valid if new_valid is not valid else None
+
 def _valid_priority(v: UOp, valids:list[UOp]) -> int:
   # we want valid that's in other valids' parents to be first, so it's more likely the other valids get simplified
   return sum(-1 if (res:=parse_valid(v)) is not None and res[0] in other.toposort() else 0 for other in valids)
 
+def _z3_too_complex(*uops:UOp) -> bool:
+  return sum(len(u.toposort()) for u in uops) > 80
+
 def simplify_valid(valid:UOp) -> UOp|None:
   if valid.op_in_backward_slice_with_self(Ops.INDEX): return None  # this should only be for indexing, skip if there's a INDEX
+  if Z3.value:
+    if valid.dtype != dtypes.bool or _z3_too_complex(valid): return None
+    try: return _z3_simplify_valid_fn(valid)
+    except (NotImplementedError, ValueError, RuntimeError): return None  # z3 can't handle this expression
   ret:list[UOp] = []
   valids = list(valid.split_uop(Ops.AND))
   valids = sorted(valids, key=lambda v: _valid_priority(v, valids))
@@ -368,6 +565,20 @@ pm_move_where_on_load = PatternMatcher([
 def gated_given_valid(cond:UOp, x:UOp, i:UOp) -> UOp|None:
   # Skip if x contains DIV/MOD AND IMAGE mode is enabled -> image index e.g. openpilot
   if IMAGE.value > 0 and x.op_in_backward_slice_with_self(Ops.IDIV, Ops.MOD): return None
+  if Z3.value:
+    if x.op is Ops.VECTORIZE or _z3_too_complex(cond, x):
+      return cond.where(uop_given_valid(cond, x, try_simplex=False), i)
+    try:
+      new_cond = cond
+      if any(u.op in (Ops.IDIV, Ops.MOD) for u in cond.toposort()):
+        new_cond = _z3_resynth_valid(cond)
+      new_x = uop_given_valid(new_cond, x, try_simplex=False)
+      new_x = _z3_constify(new_x, new_cond)
+      if any(u.op in (Ops.IDIV, Ops.MOD) for u in new_x.toposort()):
+        lin = _z3_linear_synth(new_x, new_cond)
+        if lin is not None: new_x = lin
+      return new_cond.where(new_x, i)
+    except (NotImplementedError, ValueError, RuntimeError): return cond.where(uop_given_valid(cond, x, try_simplex=False), i)
   return cond.where(uop_given_valid(cond, x, try_simplex=False), i)
 
 # TODO: this is O(number of WHERE * number of node)
