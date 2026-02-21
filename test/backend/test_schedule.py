@@ -1036,11 +1036,37 @@ class TestSchedule(unittest.TestCase):
     idx = Tensor([1,2,5,6], dtype=dtypes.int32)
     flat_base[idx] = Tensor([99,99,99,99])
     base.assign(flat_base.reshape(4, 4))
-    sched = check_schedule(base, 6)  # TODO: this is high
+    sched = check_schedule(base, 2)
     run_schedule(sched)
     expected = list(range(16))
     for i, v in zip([1,2,5,6], [99,99,99,99]): expected[i] = v
     np.testing.assert_equal(base.reshape(16).numpy(), expected)
+
+  def test_fuse_assign_chain_two(self):
+    t = Tensor([1, 2, 3, 4]).realize()
+    t += 1
+    t += 1
+    sched = check_schedule(t, 1)
+    run_schedule(sched)
+    np.testing.assert_equal(t.numpy(), [3, 4, 5, 6])
+
+  def test_fuse_assign_chain_three(self):
+    t = Tensor([1, 2, 3, 4]).realize()
+    t += 1
+    t += 1
+    t += 1
+    sched = check_schedule(t, 1)
+    run_schedule(sched)
+    np.testing.assert_equal(t.numpy(), [4, 5, 6, 7])
+
+  def test_no_fuse_assign_with_other_consumer(self):
+    t = Tensor([1, 2, 3, 4]).realize()
+    t += 1
+    u = t * 2  # intermediate is observed
+    t += 1
+    sched = check_schedule([t, u], 4)
+    run_schedule(sched)
+    np.testing.assert_equal(t.numpy(), [3, 4, 5, 6])
 
   def test_sparse_categorical_crossentropy_simple(self):
     X = Tensor([[0, 2, 3], [1, 2, 3]]).realize()
