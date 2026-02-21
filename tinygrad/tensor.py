@@ -24,7 +24,8 @@ def canonicalize_device(device:str|tuple|list|None) -> str|tuple[str, ...]:
 # *** all in scope Tensors are here. this gets relevant UOps ***
 
 all_tensors: dict[weakref.ref[Tensor], None] = {}
-_pending_assigns: dict[UOp, list[UOp]] = {}  # buffer_uop -> [assign_uops in insertion order]
+_pending_assigns: dict[UOp, list[UOp]] = {}  # target root UOp -> [assign_uops in insertion order]
+
 def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str) -> None:
   with cpu_profile(TracingKey(name), "TINY"):
     # get tensors in scope
@@ -273,11 +274,22 @@ class Tensor(OpMixin):
     """Triggers the computation needed to create these Tensor(s)."""
     # side-realize pending assigns for buffers referenced by these tensors
     if _pending_assigns:
-      def _realize_pending(buf):
-        for assign_uop in _pending_assigns.pop(buf, []):
+      def _realize_pending(target_uop:UOp):
+        pending = _pending_assigns.pop(target_uop, [])
+        # targets without concrete buffer identity (e.g. COPY to DISK from .to()) must be materialized first
+        if not target_uop.has_buffer_identity():
+          becomes_map, schedule, var_vals = complete_create_schedule_with_vars(UOp.sink(target_uop))
+          _apply_map_to_tensors(becomes_map, name="Apply Pending Target")
+          run_schedule(schedule, var_vals, do_update_stats=do_update_stats)
+          if becomes_map:
+            target_uop = becomes_map.get(target_uop, target_uop)
+            pending = [assign_uop.substitute(becomes_map) for assign_uop in pending]
+            for assigns in _pending_assigns.values():
+              for i in range(len(assigns)): assigns[i] = assigns[i].substitute(becomes_map)
+        for assign_uop in pending:
           # recursively realize pending assigns that this assign's value depends on
           for u in assign_uop.toposort():
-            if u.op is Ops.BUFFER and u in _pending_assigns: _realize_pending(u)
+            if u in _pending_assigns: _realize_pending(u)
           becomes_map, schedule, var_vals = complete_create_schedule_with_vars(UOp.sink(assign_uop))
           _apply_map_to_tensors(becomes_map, name="Apply Pending Assign")
           run_schedule(schedule, var_vals, do_update_stats=do_update_stats)
@@ -285,8 +297,7 @@ class Tensor(OpMixin):
           if becomes_map:
             for assigns in _pending_assigns.values():
               for i in range(len(assigns)): assigns[i] = assigns[i].substitute(becomes_map)
-      for buf in {u for t in (self,)+lst for u in t.uop.toposort() if u.op is Ops.BUFFER}:
-        if buf in _pending_assigns: _realize_pending(buf)
+      for target_uop in {u for t in (self,)+lst for u in t.uop.toposort() if u in _pending_assigns}: _realize_pending(target_uop)
     if len(to_realize:=[x for x in (self,)+lst if not x.uop.has_buffer_identity()]):
       run_schedule(*Tensor.schedule_with_vars(*to_realize), do_update_stats=do_update_stats)
     return self
@@ -307,20 +318,22 @@ class Tensor(OpMixin):
     # broadcast x (shape only, dtype must match)
     if self.shape != x.shape: x = x._broadcast_to(self.shape)
     if self.shape != x.shape: raise RuntimeError(f"assign shape mismatch {self.shape} != {x.shape}")
-    if not is_disk and self.device != x.device: raise RuntimeError(f"assign device mismatch {self.device} != {x.device}")
+    if self.device != x.device:
+      if is_disk and (self.uop is self.uop.base or x.uop.op in {Ops.BITCAST, Ops.CAST}):
+        x = x.contiguous().to(self.device)
+      elif not is_disk: raise RuntimeError(f"assign device mismatch {self.device} != {x.device}")
     if self.dtype != x.dtype: raise RuntimeError(f"assign dtype mismatch {self.dtype} != {x.dtype}")
     if isinstance(self.device, tuple) and self.uop.axis != x.uop.axis: raise RuntimeError(f"multi axis mismatch {self.uop.axis} != {x.uop.axis}")
 
-    # TODO: this is a hack for writing to DISK. remove with working assign
-    if is_disk:
-      self._buffer().copyin(x._data())
-      return self
     result = self._apply_uop(UOp.assign, x)
     # track view assigns (not full-buffer or assign-chain) so they can be side-realized when the buffer is read
-    if (buf_uop:=self.uop.base).op is Ops.BUFFER and self.uop.op is not Ops.ASSIGN and not self.uop.has_buffer_identity():
+    target_uop = self.uop.base
+    if is_disk:
+      while target_uop.op is Ops.BITCAST: target_uop = target_uop.src[0].base
+    if self.uop.op is not Ops.ASSIGN and not self.uop.has_buffer_identity() and self.uop is not target_uop and target_uop.op in {Ops.BUFFER, Ops.COPY}:
       # deduplicate: if the value is already a pending assign for this buffer (e.g. __iadd__ in __setitem__), remove it
-      if x.uop in _pending_assigns.get(buf_uop, []): _pending_assigns[buf_uop].remove(x.uop)
-      _pending_assigns.setdefault(buf_uop, []).append(result.uop)
+      if x.uop in _pending_assigns.get(target_uop, []): _pending_assigns[target_uop].remove(x.uop)
+      _pending_assigns.setdefault(target_uop, []).append(result.uop)
     return self.replace(result)
 
   def detach(self) -> Tensor:
@@ -1344,6 +1357,8 @@ class Tensor(OpMixin):
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
       self.assign(self._getitem(indices, v))
     elif is_disk or self.uop.is_realized: # basic setitem, self is realized. TODO: disk uop.base is a COPY and not realized
+      if is_disk and any(isinstance(i, slice) and i.step not in (None, 1) for i in idx):
+        raise RuntimeError("strided setitem is not supported for DISK tensors")
       self[indices].assign(v)
     else: # basic setitem, self is not realized
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)

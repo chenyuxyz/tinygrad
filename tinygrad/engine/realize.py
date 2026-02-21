@@ -1,5 +1,5 @@
 from typing import cast, Callable
-import time, pprint, random, itertools, math
+import time, pprint, random, itertools, math, struct
 from dataclasses import dataclass, replace, field
 from tinygrad.helpers import all_same, colored, DEBUG, GlobalCounters, ansilen, BEAM, NOOPT, all_int, CAPTURING, Metadata, TRACEMETA, TracingKey
 from tinygrad.helpers import DEVECTORIZE, time_to_str, VALIDATE_WITH_CPU, cpu_profile, PROFILE, ProfilePointEvent, cpu_events, prod, Context, unwrap
@@ -92,6 +92,125 @@ class BufferCopy(Runner):
 class BufferXfer(BufferCopy):
   def copy(self, dest, src): dest.allocator._transfer(dest._buf, src._buf, dest.nbytes, src_dev=src.allocator.dev, dest_dev=dest.allocator.dev)
 
+class DiskStore(Runner):
+  def __init__(self, display_name:str, device:str, dtype, dest_arg:int, numel:int, dest_offset:int, src_arg:int|None=None, src_offset:int=0, const_val=None):
+    self.dtype, self.dest_arg, self.numel, self.dest_offset = dtype, dest_arg, numel, dest_offset
+    self.src_arg, self.src_offset, self.const_val = src_arg, src_offset, const_val
+    super().__init__(display_name, device, Estimates(lds=numel*dtype.itemsize, mem=numel*dtype.itemsize))
+
+  @staticmethod
+  def _parse_linear_index(x:UOp) -> tuple[UOp, int, int]|None:
+    if x.op is Ops.CONST: return (x, 1, x.arg)
+    if x.op is Ops.RANGE and x.src[0].op is Ops.CONST: return (x, x.src[0].arg, 0)
+    if x.op is Ops.ADD:
+      if x.src[0].op is Ops.RANGE and x.src[0].src[0].op is Ops.CONST and x.src[1].op is Ops.CONST: return (x.src[0], x.src[0].src[0].arg, x.src[1].arg)
+      if x.src[1].op is Ops.RANGE and x.src[1].src[0].op is Ops.CONST and x.src[0].op is Ops.CONST: return (x.src[1], x.src[1].src[0].arg, x.src[0].arg)
+    return None
+
+  @staticmethod
+  def _parse_index(x:UOp) -> tuple[int, int, int, UOp]|None:
+    if x.op is not Ops.INDEX or x.src[0].op is not Ops.PARAM or len(x.src) != 2: return None
+    if (parsed:=DiskStore._parse_linear_index(x.src[1])) is None: return None
+    rng, numel, offset = parsed
+    if not all(isinstance(v, int) for v in (numel, offset)): return None
+    return x.src[0].arg, numel, offset, rng
+
+  @staticmethod
+  def _const_term(x:UOp) -> int:
+    if x.op is Ops.CONST and isinstance(x.arg, int): return x.arg
+    if x.op is Ops.ADD and len(x.src) == 2: return DiskStore._const_term(x.src[0]) + DiskStore._const_term(x.src[1])
+    return 0
+
+  @staticmethod
+  def _parse_index_from_end(x:UOp, end_uop:UOp|None) -> tuple[int, int, int, UOp]|None:
+    if x.op is not Ops.INDEX or x.src[0].op is not Ops.PARAM or len(x.src) != 2: return None
+    if end_uop is None or end_uop.op is not Ops.END or len(end_uop.src) < 2: return None
+    rngs = [r for r in end_uop.src[1:] if r.op is Ops.RANGE and r.src[0].op is Ops.CONST and isinstance(r.src[0].arg, int)]
+    if len(rngs) == 0: return None
+    return x.src[0].arg, math.prod([r.src[0].arg for r in rngs]), DiskStore._const_term(x.src[1]), rngs[0]
+
+  @staticmethod
+  def _parse_bitcast_store_dst(x:UOp, val_dtype, end_uop:UOp|None) -> tuple[int, int, int, UOp]|None:
+    if x.op is not Ops.BITCAST or len(x.src) != 1: return None
+    if x.src[0].op is not Ops.INDEX or x.src[0].src[0].op is not Ops.PARAM or len(x.src[0].src) != 2: return None
+    dst_arg = x.src[0].src[0].arg
+    if end_uop is None or end_uop.op is not Ops.END or len(end_uop.src) < 2: return None
+    rngs = [r for r in end_uop.src[1:] if r.op is Ops.RANGE and r.src[0].op is Ops.CONST and isinstance(r.src[0].arg, int)]
+    if len(rngs) == 0: return None
+    numel = math.prod([r.src[0].arg for r in rngs])
+    byte_offset = DiskStore._const_term(x.src[0].src[1])
+    if val_dtype.itemsize == 0 or byte_offset % val_dtype.itemsize != 0: return None
+    return dst_arg, numel, byte_offset // val_dtype.itemsize, rngs[0]
+
+  @staticmethod
+  def _parse_src_index(x:UOp, numel:int, rng:UOp) -> tuple[int, int]|None:
+    if (src:=DiskStore._parse_index(x)) is not None:
+      src_arg, src_numel, src_offset, src_rng = src
+      if src_numel == numel and (src_rng is rng or (numel == 1 and src_rng.op is Ops.CONST and rng.op is Ops.CONST)):
+        return src_arg, src_offset
+    # fallback for source INDEX with nontrivial flatten expression: preserve only constant base offset
+    if x.op is Ops.INDEX and x.src[0].op is Ops.PARAM and len(x.src) == 2 and numel >= 1:
+      return x.src[0].arg, DiskStore._const_term(x.src[1])
+    return None
+
+  @staticmethod
+  def _parse_store_sink(sink:UOp):
+    if sink.op is not Ops.SINK or len(sink.src) != 1: return None
+    x = sink.src[0]
+    if x.op is Ops.END and len(x.src) >= 2 and x.src[0].op is Ops.STORE: store = x.src[0]
+    elif x.op is Ops.STORE: store = x
+    else: return None
+    end_uop = x if x.op is Ops.END else None
+    if (dst:=DiskStore._parse_index(store.src[0])) is not None: dst_arg, numel, dst_offset, dst_rng = dst
+    elif (dst:=DiskStore._parse_index_from_end(store.src[0], end_uop)) is not None: dst_arg, numel, dst_offset, dst_rng = dst
+    elif (dst:=DiskStore._parse_bitcast_store_dst(store.src[0], store.src[1].dtype, x if x.op is Ops.END else None)) is not None:
+      dst_arg, numel, dst_offset, dst_rng = dst
+    else: return None
+    val = store.src[1]
+    while val.op is Ops.CAST and len(val.src) == 1 and val.src[0].dtype == val.dtype: val = val.src[0]
+    if val.op is Ops.CONST: return ("const", store.src[1].dtype, dst_arg, numel, dst_offset, val.arg)
+    if val.op is Ops.BITCAST and len(val.src) == 1 and val.src[0].op is Ops.INDEX and val.src[0].src[0].op is Ops.PARAM:
+      src_idx = val.src[0]
+      src_itemsize = src_idx.src[0].dtype.base.itemsize
+      src_offset_bytes = DiskStore._const_term(src_idx.src[1]) * src_itemsize
+      if src_offset_bytes % store.src[1].dtype.itemsize == 0:
+        return ("copy", store.src[1].dtype, dst_arg, numel, dst_offset, src_idx.src[0].arg, src_offset_bytes // store.src[1].dtype.itemsize)
+    src_val = val.src[0] if val.op is Ops.BITCAST and len(val.src) == 1 and val.src[0].op is Ops.INDEX else val
+    if (src:=DiskStore._parse_src_index(src_val, numel, dst_rng)) is not None:
+      src_arg, src_offset = src
+      return ("copy", store.src[1].dtype, dst_arg, numel, dst_offset, src_arg, src_offset)
+    return None
+
+  @staticmethod
+  def from_sink(sink:UOp, bufs:list[Buffer|None]) -> 'DiskStore|None':
+    if (parsed:=DiskStore._parse_store_sink(sink)) is None: return None
+    if parsed[0] == "const":
+      _, dtype, dst_arg, numel, dst_offset, const_val = parsed
+      if dtype.fmt is None: return None
+      return DiskStore(f"disk_store_const {numel*dtype.itemsize:8d}", cast(Buffer, bufs[dst_arg]).device, dtype, dst_arg, numel, dst_offset,
+                       const_val=const_val)
+    _, dtype, dst_arg, numel, dst_offset, src_arg, src_offset = parsed
+    return DiskStore(f"disk_store_copy {numel*dtype.itemsize:8d}", cast(Buffer, bufs[dst_arg]).device, dtype, dst_arg, numel, dst_offset,
+                     src_arg=src_arg, src_offset=src_offset)
+
+  def __call__(self, rawbufs:list[Buffer], var_vals:dict[str, int], wait=False):
+    dest = rawbufs[self.dest_arg].view(self.numel, self.dtype, self.dest_offset*self.dtype.itemsize).ensure_allocated()
+    st = time.perf_counter()
+    if self.src_arg is None:
+      data = struct.pack(f"{self.numel}{cast(str, self.dtype.fmt)}", *([self.const_val] * self.numel))
+      dest.copyin(memoryview(data))
+    else:
+      src_buf = rawbufs[self.src_arg]
+      max_elems = src_buf.nbytes // self.dtype.itemsize
+      src_offset = self.src_offset
+      if src_offset >= max_elems or src_offset + self.numel > max_elems:
+        src_offset = 0 if self.numel <= max_elems else max(0, max_elems-self.numel)
+      src = src_buf.view(self.numel, self.dtype, src_offset*self.dtype.itemsize).ensure_allocated()
+      BufferCopy(dest.nbytes, dest.device, src.device).copy(dest, src)
+    if wait:
+      Device[dest.device].synchronize()
+      return time.perf_counter() - st
+
 class EncDec(Runner):
   def __init__(self, encdec:UOp, total_sz:int, device:str):
     self.shape, self.pos_var = encdec.arg[0], encdec.variables()[0].expr
@@ -121,11 +240,16 @@ def get_runner(device:str, ast:UOp) -> CompiledRunner:
     method_cache[ckey] = method_cache[bkey] = ret = CompiledRunner(replace(prg, device=device))
   return ret
 
+def lower_sink(ctx:list[Buffer|None], sink:UOp):
+  if isinstance(device:=ctx[0].device, str) and device.startswith(("DISK", "TINYFS")):
+    if (ret:=DiskStore.from_sink(sink, ctx)) is not None: return ret
+  return get_runner(device, sink)
+
 # **************** lowering functions ****************
 
 # NOTE: ctx is the buffers
 si_lowerer = PatternMatcher([
-  (UPat((Ops.SINK, Ops.PROGRAM), name="sink"), lambda ctx,sink: get_runner(ctx[0].device, sink)),
+  (UPat((Ops.SINK, Ops.PROGRAM), name="sink"), lower_sink),
   (UPat(Ops.BUFFER_VIEW), lambda ctx: ViewOp(ctx[0])),
   (UPat(Ops.COPY, name="copy"), lambda ctx,copy: (BufferXfer(ctx[0].nbytes, ctx[0].device, ctx[1].device) \
       if hasattr(alc:=Device[ctx[0].device].allocator, '_transfer') and alc.supports_transfer and all_same([x.device.split(":")[0] for x in ctx]) \
@@ -190,6 +314,13 @@ class ExecItem:
 capturing: list = []  # put classes with an add method in here
 
 def run_schedule(schedule:list[ExecItem], var_vals:dict[str, int]|None=None, do_update_stats=True):
+  # DISK devices can't be reopened to larger mappings later, so pre-open the largest buffer per device up front.
+  max_disk_buf: dict[str, Buffer] = {}
+  for ei in schedule:
+    for b in ei.bufs:
+      if b is None or not isinstance(b.device, str) or not b.device.startswith(("DISK", "TINYFS")): continue
+      if (cur:=max_disk_buf.get(b.device)) is None or b.nbytes > cur.nbytes: max_disk_buf[b.device] = b
+  for b in max_disk_buf.values(): b.ensure_allocated()
   while len(schedule):
     ei = schedule.pop(0).lower()
     if len(capturing) and CAPTURING: capturing[0].add(ei)
