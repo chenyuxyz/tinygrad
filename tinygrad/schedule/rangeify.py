@@ -55,6 +55,18 @@ def fix_assign_hazard(assign:UOp, target:UOp, src:UOp):
     if any(s is target.base for s in h.toposort(gate=lambda s:s.op not in ALWAYS_CONTIGUOUS-{Ops.PARAM})):
       return assign.replace(src=(target, src.contiguous()))
 
+def _fuse_assign_chain(ctx:dict[UOp, int], assign:UOp, inner:UOp, root:UOp, inner_src:UOp, src:UOp):
+  """Fuse ASSIGN(ASSIGN(root, f), g(ASSIGN(root, f))) -> ASSIGN(root, g(f)) when inner ASSIGN has no other consumers."""
+  if inner.arg is not None: return None  # skip if inner has movement ops
+  if ctx.get(inner, 0) != 2: return None  # inner must only be referenced by this assign (target + source)
+  if inner not in src.toposort(): return None
+  return assign.replace(src=(root, src.substitute({inner: inner_src})))
+
+pm_fuse_assigns = PatternMatcher([
+  (UPat(Ops.ASSIGN, src=(UPat(Ops.ASSIGN, src=(UPat(name="root"), UPat(name="inner_src")), name="inner"), UPat(name="src")), name="assign"),
+   _fuse_assign_chain),
+])
+
 def normalize_assign_target_chain(assign:UOp, target:UOp, src:UOp):
   root_target = target
   while root_target.op is Ops.ASSIGN: root_target = root_target.src[0]
@@ -514,6 +526,16 @@ split_kernels = PatternMatcher([
 
 def get_rangeify(sink:UOp) -> UOp:
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Input Graph")
+
+  # fuse chained assigns: ASSIGN(ASSIGN(buf, f), g(ASSIGN(buf, f))) -> ASSIGN(buf, g(f)) when intermediate has no other consumers
+  while True:
+    ref_counts: dict[UOp, int] = {}
+    for u in sink.toposort():
+      for s in u.src: ref_counts[s] = ref_counts.get(s, 0) + 1
+    new_sink = graph_rewrite(sink, pm_fuse_assigns, ctx=ref_counts, bottom_up=True, name="fuse chained assigns")
+    if new_sink is sink: break
+    sink = new_sink
+
   tsink = graph_rewrite(sink, pm_syntactic_sugar+pm_mops+earliest_rewrites, bottom_up=True, name="earliest rewrites")
 
   # convert movement ops to ranges
