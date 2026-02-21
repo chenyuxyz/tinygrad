@@ -318,12 +318,20 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
   sdtype = x.dtype.ptr(size=size, addrspace=x.arg.addrspace)
   if (assign := x.src[0]).op is Ops.ASSIGN:
     assign_target, assign_src = assign.src[0], assign.src[1]
-    assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
+    is_bitcast_target = False
+    if assign_target.op is Ops.INDEX:
+      base_buf = assign_target.src[0]
+    elif assign_target.op is Ops.BITCAST and len(assign_target.src) == 1 and assign_target.src[0].op is Ops.INDEX:
+      base_buf = assign_target.src[0]
+      is_bitcast_target = True
+    else:
+      raise AssertionError(f"{assign_target.op} is not index")
     while assign_src.op is Ops.NOOP: assign_src = assign_src.src[0]
     # skip self-assign from same-device copy, otherwise create the store
     # in assign, this is the buffer size, not the bufferize size
-    if assign_src is assign_target: ret = assign_target.src[0]
-    else: ret = assign_target.src[0].after(assign_target.replace(dtype=sdtype).store(assign_src).end(*rngs))
+    if assign_src is assign_target: ret = base_buf
+    else: ret = base_buf.after(assign_target.replace(dtype=sdtype).store(assign_src).end(*rngs))
+    if is_bitcast_target: return ret
     for op, marg in reversed(assign.arg or ()): ret = ret._mop(op, marg)
     return ret
 
@@ -467,7 +475,8 @@ def split_store(x:UOp) -> UOp|None:
   else: ret = ret.sink(arg=KernelInfo(opts_to_apply=lctx.opts))
 
   kernel = ret.call(*lctx.map.values(), *lctx.vars.keys())
-  if ret.op is Ops.SINK and not all_same([x.device for x in kernel.src[1:] if x.op is not Ops.BIND]):
+  buf_devs = [x.device for x in kernel.src[1:] if x.op is not Ops.BIND]
+  if ret.op is Ops.SINK and not all_same(buf_devs) and not any(isinstance(dev, str) and dev.startswith(("DISK", "TINYFS")) for dev in buf_devs):
     raise RuntimeError(f"all buffers must be on the same device: {tuple(b.buf_uop for b in kernel.src[1:])}")
   return kernel
 

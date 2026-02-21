@@ -328,6 +328,15 @@ class TestDiskTensor(TempDirTestCase):
     dt[1:3].assign(Tensor.full((2,), 99, dtype=dtypes.int32)).realize()
     np.testing.assert_array_equal(dt.numpy(), [0, 99, 99, 3])
 
+  def test_assign_slice_is_lazy_until_realize(self):
+    fn = pathlib.Path(self.tmp("dt_assign_lazy"))
+    fn.write_bytes(b"\x00" * (4 * dtypes.int32.itemsize))
+    dt = Tensor.empty(4, device=f"disk:{fn}", dtype=dtypes.int32)
+    dt[1:3].assign(Tensor([7, 8], dtype=dtypes.int32, device="CPU"))
+    self.assertEqual(fn.read_bytes(), b"\x00" * (4 * dtypes.int32.itemsize))
+    dt.realize()
+    np.testing.assert_array_equal(np.frombuffer(fn.read_bytes(), dtype=np.int32), [0, 7, 8, 0])
+
   def test_disk_to_disk_copy(self):
     # disk-to-disk copy needs to go through CPU
     src = Tensor([1, 2, 3, 4], dtype=dtypes.int32).to(f"disk:{self.tmp('dt_d2d_src')}")
