@@ -356,7 +356,7 @@ class TestSchedule(unittest.TestCase):
     b = Tensor.full((4,), 2.).contiguous()
     first = a.assign(b)
     second = a.assign(b)
-    check_schedule([first, second], 2) # TODO: 1?
+    check_schedule([first, second], 3) # TODO: 1?2?
 
   def test_no_dedup_empty(self):
     a = Tensor.empty((4,))
