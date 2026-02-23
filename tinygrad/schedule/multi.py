@@ -57,6 +57,12 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
 
 # ***** multi rewrite MSELECT/MSTACK *****
 
+def copy_pure_to_device(x:UOp, d:UOp):
+  if not isinstance(x.device, str) or d.arg.split(":")[0] != x.device.split(":")[0]: return None
+  if any(u.op in {Ops.BUFFER, Ops.PARAM} or (u.op is Ops.DEVICE and u.arg != x.device) for u in x.backward_slice_with_self): return None
+  if d.arg == x.device: return x
+  return x.substitute({UOp(Ops.DEVICE, arg=x.device): UOp(Ops.DEVICE, arg=d.arg)})
+
 def mstack_early_shrink(ms:UOp, shrink:UOp):
   ret:list[UOp] = []
   def apply_shrink(s:UOp, i:int) -> UOp:
@@ -75,6 +81,8 @@ replace_allreduce = PatternMatcher([
   # BROADCAST: explicitly expand broadcast copies and combine with MSTACK
   (UPat(Ops.COPY, name="c", src=(UPat(GroupOp.All-{Ops.CONST}, name="x"), UPat(Ops.DEVICE))), lambda c,x:
     UOp(Ops.MSTACK, c.dtype, tuple(x.copy_to_device(d) for d in c.device)) if isinstance(c.device, tuple) and isinstance(x.device, str) else None),
+  # eliminate COPY for pure (no BUFFER/PARAM, single device) computations by remapping to target device
+  (UPat(Ops.COPY, src=(UPat(name="x"), UPat(Ops.DEVICE, name="d"))), copy_pure_to_device),
   # COPY_TO_ONE: if copying from multidevice to one, MSELECT the first (TODO: a little from each?)
   (UPat(Ops.COPY, name="c", src=(UPat(GroupOp.All-{Ops.CONST}, name="x"), UPat(Ops.DEVICE))), lambda c,x:
     x.mselect(0).copy_to_device(c.device) if isinstance(c.device, str) and isinstance(x.device, tuple) else None),
