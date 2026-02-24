@@ -19,7 +19,7 @@ from tinygrad.codegen.late.devectorizer import load_store_folding, load_store_in
   ReduceContext, correct_load_store, pm_render, pm_add_loads
 from tinygrad.codegen.opt.postrange import apply_opts, pm_make_images
 from tinygrad.codegen.simplify import pm_simplify_ranges, pm_flatten_range, pm_split_ranges, pm_load_collapse
-from tinygrad.schedule.rangeify import pm_add_buffers_local, rangeify_codegen, pm_mops, pm_syntactic_sugar
+from tinygrad.schedule.rangeify import pm_add_buffers_local, rangeify_codegen
 from tinygrad.codegen.late.linearizer import CFGContext, pm_split_ends, pm_add_control_flow, linearize
 from tinygrad.renderer.amd.elf import do_assemble_amd
 
@@ -29,9 +29,6 @@ def full_rewrite_to_sink(sink:UOp, ren:Renderer|None=None, optimize:bool=True) -
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Base AST")
   if DEBUG >= 5: print(pyrender(sink))
   if SPEC: type_verify(sink, kernel_spec)
-
-  # preprocess
-  sink = graph_rewrite(sink, pm_mops+pm_syntactic_sugar, name="early movement ops", bottom_up=True)
 
   # first we optimize
   if optimize:
