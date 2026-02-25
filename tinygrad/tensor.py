@@ -319,16 +319,19 @@ class Tensor(OpMixin):
     if not is_disk and self.dtype != x.dtype: raise RuntimeError(f"assign dtype mismatch {self.dtype} != {x.dtype}")
     if isinstance(self.device, tuple) and self.uop.axis != x.uop.axis: raise RuntimeError(f"multi axis mismatch {self.uop.axis} != {x.uop.axis}")
 
-    # TODO: this is a hack for writing to DISK. remove with working assign
+    # for disk: ensure base buffer is realized, then validate view is contiguous (BUFFER_VIEW can only represent offset+size)
     if is_disk:
-      self._buffer().copyin(x._data())
-      return self
+      if self.uop.base.op is not Ops.BUFFER: Tensor(self.uop.base, device=self.device).realize()
+      if self.uop.op is not Ops.BUFFER:
+        try: self.uop.buffer
+        except RuntimeError: raise RuntimeError("non-contiguous disk tensor assigns are not supported") from None
     result = self._apply_uop(UOp.assign, x)
     # track view assigns (not full-buffer or assign-chain) so they can be side-realized when the buffer is read
     if (buf_uop:=self.uop.base).op is Ops.BUFFER and self.uop.op is not Ops.ASSIGN and not self.uop.has_buffer_identity():
       # deduplicate: if the value is already a pending assign for this buffer (e.g. __iadd__ in __setitem__), remove it
       if x.uop in _pending_assigns.get(buf_uop, []): _pending_assigns[buf_uop].remove(x.uop)
       _pending_assigns.setdefault(buf_uop, []).append(result.uop)
+    if is_disk: return self.replace(result).realize()
     return self.replace(result)
 
   def detach(self) -> Tensor:
@@ -1352,6 +1355,8 @@ class Tensor(OpMixin):
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
       self.assign(self._getitem(indices, v))
     elif is_disk or self.uop.is_realized: # basic setitem, self is realized. TODO: disk uop.base is a COPY and not realized
+      if is_disk and any(isinstance(i, slice) and i.step is not None and i.step != 1 for i in idx):
+        raise RuntimeError("strided setitem is not supported for DISK tensors")
       self[indices].assign(v)
     else: # basic setitem, self is not realized
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)

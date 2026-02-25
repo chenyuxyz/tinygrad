@@ -319,13 +319,35 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
   sdtype = x.dtype.ptr(size=size, addrspace=x.arg.addrspace)
   if (assign := x.src[0]).op is Ops.ASSIGN:
     assign_target, assign_src = assign.src[0], assign.src[1]
+    # BITCAST may remain in target after handle_assign_mops extracts it to assign.arg
+    while assign_target.op is Ops.BITCAST: assign_target = assign_target.src[0]
     assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
     while assign_src.op is Ops.NOOP: assign_src = assign_src.src[0]
     # skip self-assign from same-device copy, otherwise create the store
     # in assign, this is the buffer size, not the bufferize size
     if assign_src is assign_target: ret = assign_target.src[0]
-    else: ret = assign_target.src[0].after(assign_target.replace(dtype=sdtype).store(assign_src).end(*rngs))
-    for op, marg in reversed(assign.arg or ()): ret = ret._mop(op, marg)
+    else:
+      param = assign_target.src[0]
+      # for disk view writes: unwrap BITCAST around COPY (from bitcast move rule) and create BUFFER_VIEW + COPY
+      actual_copy = assign_src
+      if actual_copy.op is Ops.BITCAST and actual_copy.src[0].op is Ops.COPY: actual_copy = actual_copy.src[0]
+      is_disk_view = isinstance(param.device, str) and param.device.startswith(("DISK", "TINYFS")) \
+        and actual_copy.op is Ops.COPY and (assign.arg or actual_copy is not assign_src)
+      if is_disk_view:
+        # compute offset from the INDEX node (same approach as late_buffer_view for reads)
+        offset = max(sum(idx.vmin for idx in assign_target.src[1:]), 0)
+        # use the COPY's dtype for the view (handles BITCAST case where x.dtype differs from COPY dtype)
+        view_dtype, view_size = actual_copy.dtype, size * x.dtype.itemsize // actual_copy.dtype.itemsize
+        view_sdtype = view_dtype.ptr(size=view_size, addrspace=x.arg.addrspace)
+        # create view buffer and BUFFER_VIEW store
+        view_buf = UOp(Ops.BUFFER, view_dtype, (UOp(Ops.LUNIQUE, arg=next(ctx)), UOp(Ops.DEVICE, arg=param.device)), view_size)
+        bv = UOp(Ops.BUFFER_VIEW, view_dtype, (assign_target,), (view_size, offset))
+        bv_store = view_buf.index(idx, dtype=view_sdtype).store(bv).end(*rngs)
+        copy_store = view_buf.after(bv_store).index(idx, dtype=view_sdtype).store(actual_copy).end(*rngs)
+        ret = param.after(copy_store)
+      else:
+        ret = param.after(assign_target.replace(dtype=sdtype).store(assign_src).end(*rngs))
+    for op, marg in reversed(assign.arg or ()): ret = ret.bitcast(marg) if op is Ops.BITCAST else ret._mop(op, marg)
     return ret
 
   # NOTE: the DEFINE_LOCAL needs to be disambiguated here
