@@ -546,6 +546,8 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
   def copy_to_device(self, device:str|tuple[str, ...]|UOp, arg=None):
     assert arg is None or isinstance(self.device, tuple)
     inp = self if arg is None else UOp(Ops.MSELECT, self.dtype, src=(self,), arg=arg)
+    if arg is None and isinstance(device, str) and device.startswith("DISK"):
+      return UOp.new_buffer(device, inp.shard_size, inp.dtype).reshape(inp.max_shard_shape).assign(inp)
     return UOp(Ops.COPY, self.dtype, (inp, UOp(Ops.DEVICE, arg=device) if not isinstance(device, UOp) else device))
   def mselect(self, arg:int) -> UOp: return UOp(Ops.MSELECT, self.dtype, (self,), arg)
   @property
@@ -559,6 +561,7 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
     if self.op in GroupOp.Movement: return self.src[0].base
     if self.op is Ops.MULTI: return self.src[0].base  # MULTI is really a VIEW
     if self.op is Ops.DETACH: return self.src[0].base  # DETACH can't change base
+    if self.op is Ops.ASSIGN and self.src[0].op is not Ops.ASSIGN: return self.src[0].base
     return self
 
   @property

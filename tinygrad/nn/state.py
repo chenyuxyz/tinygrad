@@ -80,7 +80,12 @@ def safe_save(tensors:dict[str, Tensor], fn:str, metadata:dict[str, Any]|None=No
   t = Tensor.empty(8+len(j)+offset, dtype=dtypes.uint8, device=f"disk:{fn}")
   t[0:8].assign(Tensor([len(j)], dtype=dtypes.int64, device="CPU").bitcast(dtypes.uint8))
   t[8:8+len(j)].assign(list(j.encode('utf-8')))
-  for k,v in safe_load(t).items(): v.assign(tensors[k])
+  data_start = 8 + len(j)
+  for k,v in tensors.items():
+    st, en = headers[k]['data_offsets']
+    t[data_start+st:data_start+en].assign(v.to("CPU").bitcast(dtypes.uint8).flatten())
+  # flush pending view-assigns so the file is fully written before returning
+  t.realize()
 
 # state dict
 
