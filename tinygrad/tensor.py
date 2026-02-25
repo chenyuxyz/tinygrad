@@ -25,8 +25,13 @@ def canonicalize_device(device:str|tuple|list|None) -> str|tuple[str, ...]:
 # *** all in scope Tensors are here. this gets relevant UOps ***
 
 all_tensors: dict[weakref.ref[Tensor], None] = {}
-_pending_assigns: dict[UOp, list[UOp]] = {}  # buffer_uop -> [assign_uops in insertion order]
-def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str) -> None:
+def _strip_non_kernel_after(u:UOp, keep:tuple[Ops, ...]) -> UOp|None:
+  if u.op is not Ops.AFTER: return None
+  keep_src = tuple(s for s in u.src[1:] if s.op in keep)
+  if len(keep_src) == len(u.src)-1: return None
+  return u.src[0].after(*keep_src)
+
+def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str, walk:bool=False, cleanup_after:bool=False) -> None:
   with cpu_profile(TracingKey(name), "TINY"):
     # get tensors in scope
     in_scope: dict[UOp, bool] = {}
@@ -35,7 +40,10 @@ def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str) -> None:
 
     # get all Tensors and apply the map
     sink = UOp.sink(*[t.uop for t in scope_tensors])
-    new_sink = sink.substitute(applied_map, name=f"substitute {name}")
+    new_sink = sink.substitute(applied_map, name=f"substitute {name}", walk=walk)
+    if cleanup_after:
+      cleanup_map = {u:nu for u in new_sink.toposort() if (nu:=_strip_non_kernel_after(u, (Ops.CALL, Ops.END, Ops.LINEAR, Ops.ASSIGN))) is not None}
+      if cleanup_map: new_sink = new_sink.substitute(cleanup_map, name=f"substitute cleanup {name}", walk=True)
 
     # set the relevant uop to the realized UOps
     for t,s,ns in zip(scope_tensors, sink.src, new_sink.src):
@@ -263,7 +271,9 @@ class Tensor(OpMixin):
     NOTE: A Tensor can only be scheduled once.
     """
     big_sink, becomes_map = transform_to_call(UOp.sink(*[x.uop for x in (self,)+lst]))
-    _apply_map_to_tensors(becomes_map, name="buffers")
+    _apply_map_to_tensors(becomes_map, name="buffers", cleanup_after=True)
+    cleanup_after = {u:nu for u in big_sink.toposort() if (nu:=_strip_non_kernel_after(u, (Ops.CALL, Ops.END, Ops.LINEAR))) is not None}
+    if cleanup_after: big_sink = big_sink.substitute(cleanup_after, name="Cleanup Schedule AFTER", walk=True)
 
     # this is where the schedule cache should go
     schedule, var_vals = complete_create_schedule_with_vars(big_sink)
@@ -278,23 +288,22 @@ class Tensor(OpMixin):
   @disable_gc()
   def realize(self, *lst:Tensor, do_update_stats=True) -> Tensor:
     """Triggers the computation needed to create these Tensor(s)."""
-    # side-realize pending assigns for buffers referenced by these tensors
-    if _pending_assigns:
-      def _realize_pending(buf):
-        for assign_uop in _pending_assigns.pop(buf, []):
-          # recursively realize pending assigns that this assign's value depends on
-          for u in assign_uop.toposort():
-            if u.op is Ops.BUFFER and u in _pending_assigns: _realize_pending(u)
-          big_sink, becomes_map = transform_to_call(UOp.sink(assign_uop))
-          schedule, var_vals = complete_create_schedule_with_vars(big_sink)
-          _apply_map_to_tensors(becomes_map, name="Apply Pending Assign")
-          run_schedule(schedule, var_vals, do_update_stats=do_update_stats)
-          # update remaining pending assigns so they reference realized buffers instead of stale lazy graphs
-          if becomes_map:
-            for assigns in _pending_assigns.values():
-              for i in range(len(assigns)): assigns[i] = assigns[i].substitute(becomes_map)
-      for buf in {u for t in (self,)+lst for u in t.uop.toposort() if u.op is Ops.BUFFER}:
-        if buf in _pending_assigns: _realize_pending(buf)
+    # realize embedded view assigns in dependency order before scheduling requested roots
+    while True:
+      sink = UOp.sink(*[x.uop for x in (self,)+lst])
+      root_uops = {x.uop for x in (self,)+lst}
+      assign_uop = next((u.src[1] for u in sink.toposort()
+                         if u.op is Ops.AFTER and len(u.src) > 1 and u.src[1].op is Ops.ASSIGN and u.src[1] not in root_uops), None)
+      if assign_uop is None: break
+
+      big_sink, becomes_map = transform_to_call(UOp.sink(assign_uop))
+      cleanup_after = {u:nu for u in big_sink.toposort() if (nu:=_strip_non_kernel_after(u, (Ops.CALL, Ops.END, Ops.LINEAR))) is not None}
+      if cleanup_after: big_sink = big_sink.substitute(cleanup_after, name="Cleanup Embedded AFTER", walk=True)
+      schedule, var_vals = complete_create_schedule_with_vars(big_sink)
+      _apply_map_to_tensors(becomes_map, name="embedded buffers", cleanup_after=True)
+      if len(schedule): run_schedule(schedule, var_vals, do_update_stats=do_update_stats)
+      elif not becomes_map: break
+
     if len(to_realize:=[x for x in (self,)+lst if not x.uop.has_buffer_identity()]):
       run_schedule(*Tensor.schedule_with_vars(*to_realize), do_update_stats=do_update_stats)
     return self
@@ -323,12 +332,16 @@ class Tensor(OpMixin):
     if is_disk:
       self._buffer().copyin(x._data())
       return self
-    result = self._apply_uop(UOp.assign, x)
-    # track view assigns (not full-buffer or assign-chain) so they can be side-realized when the buffer is read
-    if (buf_uop:=self.uop.base).op is Ops.BUFFER and self.uop.op is not Ops.ASSIGN and not self.uop.has_buffer_identity():
-      # deduplicate: if the value is already a pending assign for this buffer (e.g. __iadd__ in __setitem__), remove it
-      if x.uop in _pending_assigns.get(buf_uop, []): _pending_assigns[buf_uop].remove(x.uop)
-      _pending_assigns.setdefault(buf_uop, []).append(result.uop)
+    # if RHS contains a write-dependent shared contiguous result, materialize it before a view write to preserve assign boundaries
+    if self.uop is not self.uop.base:
+      rhs_ops = {u.op for u in x.uop.toposort()}
+      if Ops.AFTER in rhs_ops and Ops.CONTIGUOUS in rhs_ops: x = x.contiguous()
+    assign_uop = self.uop.assign(x.uop)
+    # for view assigns, append this write to the base AFTER chain so reads of the base realize it in-order
+    if self.uop.op is not Ops.ASSIGN and self.uop is not (base_uop:=self.uop.base) and not self.uop.has_buffer_identity() and \
+       base_uop.op in {Ops.BUFFER, Ops.AFTER}:
+      _apply_map_to_tensors({base_uop: base_uop.after(assign_uop)}, name="Embed View Assign", walk=True)
+    result = self._apply_uop(lambda *_: assign_uop, x)
     return self.replace(result)
 
   def detach(self) -> Tensor:
@@ -344,7 +357,9 @@ class Tensor(OpMixin):
       raise JitError("cannot access tensor data during JIT capture, the value will be baked in")
     x = self.cast(self.dtype.base).contiguous()
     if isinstance(self.device, tuple): x = x.to("CPU")
-    return cast(Buffer, x.realize().uop.buffer).ensure_allocated()
+    x = x.realize()
+    if not x.uop.has_buffer_identity(): x = x.contiguous().realize()
+    return cast(Buffer, x.uop.buffer).ensure_allocated()
   def _data(self) -> memoryview: return self._buffer().as_memoryview()
 
   def data(self) -> memoryview:
@@ -1347,12 +1362,25 @@ class Tensor(OpMixin):
     if self.requires_grad or (isinstance(v, Tensor) and v.requires_grad): raise NotImplementedError("setitem with requires_grad is not supported")
     idx = [indices] if (isinstance(indices, list) and all_int(indices)) or not isinstance(indices, (tuple, list)) else list(indices)
     is_disk = isinstance(self.device, str) and self.device.startswith("DISK")
+    realized_base = self.uop.base
+    while realized_base.op is Ops.AFTER: realized_base = realized_base.src[0]
+    is_realized = self.uop.is_realized or realized_base.is_realized
     if any(isinstance(i, (Tensor, list, tuple)) for i in idx): # advanced setitem
       if is_disk: raise RuntimeError("advanced setitem is not supported for DISK tensors")
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
       self.assign(self._getitem(indices, v))
-    elif is_disk or self.uop.is_realized: # basic setitem, self is realized. TODO: disk uop.base is a COPY and not realized
-      self[indices].assign(v)
+    elif is_disk or is_realized: # basic setitem, self is realized. TODO: disk uop.base is a COPY and not realized
+      target = self[indices]
+      # x[idx] += y runs __iadd__ on a temporary view, then __setitem__; if __iadd__ already produced target.assign(...), skip re-assign
+      if isinstance(v, Tensor) and v.uop.op is Ops.ASSIGN:
+        if v.uop.src[0] is target.uop: return
+        tb = target.uop.base
+        while tb.op is Ops.AFTER:
+          if any(s is v.uop for s in tb.src[1:]): return
+          tb = tb.src[0].base
+      # __iadd__/__isub__ can pass an ASSIGN here; unwrap to avoid creating an extra nested ASSIGN
+      if isinstance(v, Tensor) and v.uop.op is Ops.ASSIGN: v = v._apply_uop(lambda x: x.src[1])
+      target.assign(v)
     else: # basic setitem, self is not realized
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
       # __iadd__/__isub__ on unrealized views creates a no-op ASSIGN; unwrap to get the computed value
