@@ -57,6 +57,10 @@ def replace_assign_with_contig(u:UOp):
   while assigned_to.op in {Ops.ASSIGN, Ops.BITCAST}: assigned_to = assigned_to.src[0].base
   if assigned_to.op is not Ops.BUFFER:
     return u.src[1].contiguous(tag=u.tag)
+  # insert COPY for cross-device ASSIGN to DISK
+  target_device = u.src[0].device
+  if isinstance(target_device, str) and target_device.startswith(("DISK", "TINYFS")) and u.src[1].device != target_device:
+    return u.replace(src=(u.src[0], u.src[1].copy_to_device(target_device)))
 
 def found_contiguous(ctx:dict[UOp, UOp], contig:UOp, src:UOp):
   x = src
@@ -88,7 +92,8 @@ pm_early_transform_tensor_graph = PatternMatcher([
   # handle size 0
   (UPat(GroupOp.All-{Ops.SINK}, name="x"), lambda x: x.const_like(0).rtag(x.tag) if x._shape is not None and x.size == 0 else None),
   # early fixup const copy (TODO: is this wrong if there's a pad?)
-  (UPat(Ops.COPY, src=(UPat.var("s"), UPat()), name="c"), lambda c,s: c.const_like(ss.arg) if (ss:=s.base).op is Ops.CONST else None),
+  (UPat(Ops.COPY, src=(UPat.var("s"), UPat()), name="c"), lambda c,s: c.const_like(ss.arg)
+   if (ss:=s.base).op is Ops.CONST and not (isinstance(c._device, str) and c._device.startswith(("DISK", "TINYFS"))) else None),
 ])
 
 def untag_and_append(ctx:AllocCtx, x:UOp):

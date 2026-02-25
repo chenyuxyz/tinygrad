@@ -19,9 +19,13 @@ def realize_srcs(ctx:dict[UOp, None], rb:UOp) -> None:
 
 def realize_assign_src(ctx:dict[UOp, None], buf:UOp, x:UOp):
   # don't realize COPY/BUFFER_VIEW/ENCDEC when they are the direct source of ASSIGN — the ASSIGN target buffer is the output
+  # for DISK/TINYFS targets, always keep COPY as direct source (no kernels on disk)
+  is_disk = isinstance(buf.device, str) and buf.device.startswith(("DISK", "TINYFS"))
   if x.op in {Ops.COPY, Ops.BUFFER_VIEW, Ops.ENCDEC} and x in ctx \
-     and not buf.op_in_backward_slice_with_self(Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD):
+     and (is_disk or not buf.op_in_backward_slice_with_self(Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD)):
     del ctx[x]
+  # for disk BITCAST(COPY), keep COPY unrealized (bitcast move rule wraps COPY with BITCAST)
+  if is_disk and x.op is Ops.BITCAST and x.src[0].op is Ops.COPY and x.src[0] in ctx: del ctx[x.src[0]]
   # you don't usually have to do this for assign unless there's a WAR hazard like TestAssign.test_assign_double_diamond_reduce
   if buf.base in x.backward_slice_with_self: ctx[x] = None
 
@@ -100,10 +104,10 @@ def remove_movement_op_after_rangeify(ctx:IndexingContext, x:UOp):
   if x in ctx.range_map or x.src[0].op is Ops.INDEX: return x.src[0]
 
 def handle_assign_mops(ctx:IndexingContext, assign:UOp, target:UOp, src:UOp):
-  if target.op in GroupOp.Movement and src.op is not Ops.CALL:
+  if (target.op in GroupOp.Movement or target.op is Ops.BITCAST) and src.op is not Ops.CALL:
     mops = []
-    while target.op in GroupOp.Movement:
-      mops.append((target.op, target.marg))
+    while target.op in GroupOp.Movement or target.op is Ops.BITCAST:
+      mops.append((target.op, target.dtype) if target.op is Ops.BITCAST else (target.op, target.marg))
       target = target.src[0]
     if mops and assign in ctx.range_map:
       ret = assign.replace(arg=tuple(mops))
