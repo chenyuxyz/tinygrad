@@ -40,12 +40,27 @@ def fix_assign_hazard(assign:UOp, target:UOp, src:UOp):
   if any(s.op in unsafe and target.base in s.backward_slice for s in src.toposort(gate=lambda s:s.op not in ALWAYS_CONTIGUOUS)):
     return assign.replace(src=(target, src.contiguous()))
 
+def rewrite_cross_device_disk_assign(assign:UOp, target:UOp, src:UOp):
+  if not (isinstance(target.device, str) and target.device.startswith(("DISK", "TINYFS"))): return None
+  # Slice/view/bitcast-target assigns need destination offset semantics. Copying RHS into a standalone DISK buffer
+  # loses that mapping and can also open the file with the wrong (smaller) size.
+  if target.op not in {Ops.BUFFER, Ops.COPY}: return assign.replace(src=(target, src.contiguous()))
+  if src.op is Ops.COPY and src.device == target.device: return None
+  # materialize source on its native device, then lower the write as a cross-device COPY into the assign target
+  return assign.replace(src=(target, src.contiguous().copy_to_device(target.device)))
+
 def normalize_assign_target_chain(assign:UOp, target:UOp, src:UOp):
   root_target = target
   while root_target.op is Ops.ASSIGN: root_target = root_target.src[0]
   # when RHS depends on the previous assign result, break with contiguous
   if target in src.toposort(): src = src.contiguous()
   return assign.replace(src=(root_target, src))
+
+def move_bitcast_from_assign_target(target:UOp, src:UOp):
+  # Keep bitcast-on-target for DISK/TINYFS, so assign can lower to a raw copy without creating
+  # a byte-pack kernel (e.g. float->uchar), which some CPU renderers can't emit correctly.
+  if isinstance(target.device, str) and target.device.startswith(("DISK", "TINYFS")): return None
+  return target.assign(src.bitcast(target.dtype))
 
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
@@ -128,13 +143,16 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # move bitcast from assign target to source: a.bitcast(X).assign(src) -> a.assign(src.bitcast(a.dtype))
   (UPat(Ops.ASSIGN, src=(UPat(Ops.BITCAST, src=(UPat(name="target"),)), UPat(name="src"))),
-   lambda target, src: target.assign(src.bitcast(target.dtype))),
+   move_bitcast_from_assign_target),
 
   # if assign target is itself an ASSIGN chain, canonicalize to the original buffer target
   (UPat(Ops.ASSIGN, src=(UPat(Ops.ASSIGN, name="target"), UPat(name="src")), allow_any_len=True, name="assign"), normalize_assign_target_chain),
 
   # make source contiguous if it has hazardous movement ops on the dest buffer
   (UPat(Ops.ASSIGN, src=(UPat.var("target"), UPat.var("src")), name="assign"), fix_assign_hazard),
+
+  # lower cross-device assigns to DISK/TINYFS as COPYs (DISK has no renderer)
+  (UPat(Ops.ASSIGN, src=(UPat.var("target"), UPat.var("src")), name="assign"), rewrite_cross_device_disk_assign),
 ])
 
 # *****************
@@ -322,6 +340,9 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
   sdtype = x.dtype.ptr(size=size, addrspace=x.arg.addrspace)
   if (assign := x.src[0]).op is Ops.ASSIGN:
     assign_target, assign_src = assign.src[0], assign.src[1]
+    if assign_target.op is Ops.BITCAST and assign_target.src[0].op is Ops.INDEX and isinstance(assign_target.src[0].src[0]._device, str) \
+        and assign_target.src[0].src[0]._device.startswith(("DISK", "TINYFS")):
+      assign_target = assign_target.src[0].replace(dtype=assign_target.dtype)
     assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
     while assign_src.op is Ops.NOOP: assign_src = assign_src.src[0]
     # skip self-assign from same-device copy, otherwise create the store
@@ -471,18 +492,25 @@ def split_store(x:UOp) -> UOp|None:
   # local kernel rewrite
   lctx = LocalAddBufferContext()
   ret = graph_rewrite(x, to_define_global+pm_flatten_range+rangeify_codegen, ctx=lctx, name="kernel split", bottom_up=True)
+  kernel_bufs = tuple(lctx.map.values())
 
   # SINK requires all buffers on the same device, but COPY/BUFFER_VIEW/ENCDEC are cross-device or special hardware ops
-  if ret.op is Ops.STORE: stored = ret.src[1]
-  elif ret.op is Ops.END and ret.src[0].op is Ops.STORE: stored = ret.src[0].src[1]
+  if ret.op is Ops.STORE: stored, store = ret.src[1], ret
+  elif ret.op is Ops.END and ret.src[0].op is Ops.STORE: stored, store = ret.src[0].src[1], ret.src[0]
   else: raise RuntimeError(f"unknown kernel type {ret.op}")
+  dest_dev = None
+  if store.src[0].op is Ops.INDEX and store.src[0].src[0].op is Ops.PARAM and isinstance(store.src[0].src[0].arg, int) and store.src[0].src[0].arg < len(kernel_bufs):
+    dest_dev = kernel_bufs[store.src[0].src[0].arg]._device
+  is_disk_dest = isinstance(dest_dev, str) and dest_dev.startswith(("DISK", "TINYFS"))
   if stored.op in {Ops.COPY, Ops.BUFFER_VIEW}: ret = stored.replace(src=stored.src + ret.ended_ranges)
   elif stored.op is Ops.ENCDEC: ret = stored
   else: ret = ret.sink(arg=KernelInfo(opts_to_apply=lctx.opts))
 
-  kernel = ret.call(*lctx.map.values(), *lctx.vars.keys())
+  kernel = ret.call(*kernel_bufs, *lctx.vars.keys())
   if ret.op is Ops.SINK and not all_same([x.device for x in kernel.src[1:] if x.op is not Ops.BIND]):
-    raise RuntimeError(f"all buffers must be on the same device: {tuple(b.buf_uop for b in kernel.src[1:])}")
+    # DISK/TINYFS stores with direct source indexing are lowered to BufferCopyOffset in realize.py.
+    if not (is_disk_dest and stored.op is Ops.INDEX and stored.src[0].op in {Ops.BUFFER, Ops.PARAM}):
+      raise RuntimeError(f"all buffers must be on the same device: {tuple(b.buf_uop for b in kernel.src[1:])}")
   return kernel
 
 split_kernels = PatternMatcher([

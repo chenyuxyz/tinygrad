@@ -89,6 +89,14 @@ class BufferCopy(Runner):
       Device[dest.device].synchronize()
       return time.perf_counter() - st
 
+class BufferCopyOffset(BufferCopy):
+  def __init__(self, total_sz:int, dest_device:str, src_device:str, dest_off_bytes:int):
+    super().__init__(total_sz, dest_device, src_device)
+    self.dest_off_bytes = dest_off_bytes
+  def __call__(self, rawbufs:list[Buffer], var_vals:dict[str, int], wait=False):
+    dest, src = rawbufs[0:2]
+    return super().__call__([dest.view(src.size, src.dtype, self.dest_off_bytes).ensure_allocated(), src], var_vals, wait=wait)
+
 class BufferXfer(BufferCopy):
   def copy(self, dest, src): dest.allocator._transfer(dest._buf, src._buf, dest.nbytes, src_dev=src.allocator.dev, dest_dev=dest.allocator.dev)
 
@@ -123,8 +131,41 @@ def get_runner(device:str, ast:UOp) -> CompiledRunner:
 
 # **************** lowering functions ****************
 
+def _extract_store_copy_offset(sink:UOp) -> int|None:
+  if sink.op is Ops.PROGRAM:
+    if len(sink.src) == 0 or sink.src[0].op is not Ops.SINK: return None
+    sink = sink.src[0]
+  if sink.op is not Ops.SINK or len(sink.src) != 1: return None
+  snk_child = sink.src[0]
+  if snk_child.op is Ops.END and snk_child.src[0].op is Ops.STORE: store = snk_child.src[0]
+  elif snk_child.op is Ops.STORE: store = snk_child
+  else: return None
+  target, source = store.src
+  if target.op is not Ops.INDEX or source.op is not Ops.INDEX: return None
+  if target.src[0].op is not Ops.PARAM or source.src[0].op is not Ops.PARAM: return None
+
+  if len(target.src) != 2 or len(source.src) != 2: return None
+
+  def _base_plus_const(x:UOp) -> tuple[UOp|None, int]:
+    if x.op is Ops.CONST: return None, x.arg
+    if x.op is Ops.ADD and x.src[0].op is Ops.CONST: return x.src[1], x.src[0].arg
+    if x.op is Ops.ADD and x.src[1].op is Ops.CONST: return x.src[0], x.src[1].arg
+    return x, 0
+
+  target_base, target_off = _base_plus_const(target.src[1])
+  source_base, source_off = _base_plus_const(source.src[1])
+  if target_base is not source_base: return None
+  return target_off - source_off
+
+def lower_disk_store_copy(ctx:list[Buffer|None], sink:UOp):
+  if len(ctx) < 2 or ctx[0] is None or ctx[1] is None: return None
+  if not (isinstance(ctx[0].device, str) and ctx[0].device.startswith(("DISK", "TINYFS"))): return None
+  if (dest_off:=_extract_store_copy_offset(sink)) is None: return None
+  return BufferCopyOffset(ctx[1].nbytes, ctx[0].device, ctx[1].device, dest_off*ctx[0].dtype.itemsize)
+
 # NOTE: ctx is the buffers
 si_lowerer = PatternMatcher([
+  (UPat((Ops.SINK, Ops.PROGRAM), name="sink"), lower_disk_store_copy),
   (UPat((Ops.SINK, Ops.PROGRAM), name="sink"), lambda ctx,sink: get_runner(ctx[0].device, sink)),
   (UPat(Ops.BUFFER_VIEW), lambda ctx: ViewOp(ctx[0])),
   (UPat(Ops.COPY, name="copy"), lambda ctx,copy: (BufferXfer(ctx[0].nbytes, ctx[0].device, ctx[1].device) \
