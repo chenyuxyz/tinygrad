@@ -359,7 +359,6 @@ def is_dtype_supported(dtype:DType, device:str|None=None) -> bool:
   if device == "WEBGPU": return dtype in [dtypes.bool, dtypes.char, dtypes.uchar, dtypes.short,
                                           dtypes.ushort, dtypes.float, dtypes.int32, dtypes.uint32, dtypes.half]
   # for CI GPU and OSX, cl_khr_fp16 isn't supported
-  # for CI LLVM, it segfaults because it can't link to the casting function
   # CI CUDA architecture is sm_35 but we need at least sm_70 to run fp16 ALUs
   # PYTHON supports half memoryview in 3.12+ https://github.com/python/cpython/issues/90751
   # double can't be bitcast to anything without long support
@@ -367,7 +366,6 @@ def is_dtype_supported(dtype:DType, device:str|None=None) -> bool:
     if device == "CL": return not CI and not OSX
     if device == "QCOM": return False # QCOM compiler is flaky with half
     if device in ["CUDA", "NV"]: return not CI
-    if device == "CPU" and CPU_LLVM: return OSX
     if device == "PYTHON": return sys.version_info >= (3, 12)
   if dtype == dtypes.float64: return (device not in {"METAL", "QCOM"} and not (OSX and device == "CL") and not getenv("NULL_IR3")
                                       and dtypes.long not in EMULATED_DTYPES.tolist(dtypes))
