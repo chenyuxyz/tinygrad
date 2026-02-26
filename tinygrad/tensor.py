@@ -12,11 +12,13 @@ from tinygrad.helpers import suppress_finalizing, disable_gc
 from tinygrad.gradient import compute_gradient
 from tinygrad.mixin import OpMixin
 from tinygrad.mixin.movement import _align_left
-from tinygrad.uop.ops import smax, smin, resolve, UOp, Ops, sint, identity_element, all_metadata, _index_to_concrete_int, sint_to_uop, Variable
+from tinygrad.uop.ops import smax, smin, resolve, UOp, UPat, PatternMatcher, Ops, sint, identity_element, all_metadata
+from tinygrad.uop.ops import graph_rewrite, _index_to_concrete_int, sint_to_uop, Variable
 from tinygrad.engine.schedule import ExecItem, complete_create_schedule_with_vars
 from tinygrad.device import Device, Buffer
 from tinygrad.engine.realize import run_schedule
 from tinygrad.engine.allocations import transform_to_call
+from tinygrad.schedule.rangeify import strip_after_sources
 
 # TODO: this should be the only usage of Device
 def canonicalize_device(device:str|tuple|list|None) -> str|tuple[str, ...]:
@@ -25,17 +27,29 @@ def canonicalize_device(device:str|tuple|list|None) -> str|tuple[str, ...]:
 # *** all in scope Tensors are here. this gets relevant UOps ***
 
 all_tensors: dict[weakref.ref[Tensor], None] = {}
-_pending_assigns: dict[UOp, list[UOp]] = {}  # buffer_uop -> [assign_uops in insertion order]
-def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str) -> None:
+pm_substitute_and_cleanup_after = PatternMatcher([
+  (UPat(tuple(Ops), name="x"), lambda ctx,x: ctx.get(x, None)),
+  (UPat(Ops.AFTER, name="a"), lambda a: strip_after_sources(a)),
+])
+
+def _is_redundant_assign(value_uop:UOp, target_uop:UOp) -> bool:
+  if value_uop.op is not Ops.ASSIGN: return False
+  target_nodes = target_uop.toposort()
+  return value_uop in target_nodes or value_uop.src[0] in target_nodes
+
+def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str, walk:bool=False) -> None:
+  applied_map = {k:v for k,v in applied_map.items() if k is not v}
+  if not applied_map: return
   with cpu_profile(TracingKey(name), "TINY"):
     # get tensors in scope
     in_scope: dict[UOp, bool] = {}
     def visitor(node: UOp) -> bool: return True if node in applied_map else any(in_scope.get(s, False) for s in node.src)
     scope_tensors: list[Tensor] = [t for tref in list(all_tensors) if (t:=tref()) is not None and t.uop.topovisit(visitor, in_scope)]
+    if not scope_tensors: return
 
     # get all Tensors and apply the map
     sink = UOp.sink(*[t.uop for t in scope_tensors])
-    new_sink = sink.substitute(applied_map, name=f"substitute {name}")
+    new_sink = graph_rewrite(sink, pm_substitute_and_cleanup_after, applied_map, bottom_up=True, walk=walk, name=f"substitute {name}")
 
     # set the relevant uop to the realized UOps
     for t,s,ns in zip(scope_tensors, sink.src, new_sink.src):
@@ -278,23 +292,6 @@ class Tensor(OpMixin):
   @disable_gc()
   def realize(self, *lst:Tensor, do_update_stats=True) -> Tensor:
     """Triggers the computation needed to create these Tensor(s)."""
-    # side-realize pending assigns for buffers referenced by these tensors
-    if _pending_assigns:
-      def _realize_pending(buf):
-        for assign_uop in _pending_assigns.pop(buf, []):
-          # recursively realize pending assigns that this assign's value depends on
-          for u in assign_uop.toposort():
-            if u.op is Ops.BUFFER and u in _pending_assigns: _realize_pending(u)
-          big_sink, becomes_map = transform_to_call(UOp.sink(assign_uop))
-          schedule, var_vals = complete_create_schedule_with_vars(big_sink)
-          _apply_map_to_tensors(becomes_map, name="Apply Pending Assign")
-          run_schedule(schedule, var_vals, do_update_stats=do_update_stats)
-          # update remaining pending assigns so they reference realized buffers instead of stale lazy graphs
-          if becomes_map:
-            for assigns in _pending_assigns.values():
-              for i in range(len(assigns)): assigns[i] = assigns[i].substitute(becomes_map)
-      for buf in {u for t in (self,)+lst for u in t.uop.toposort() if u.op is Ops.BUFFER}:
-        if buf in _pending_assigns: _realize_pending(buf)
     if len(to_realize:=[x for x in (self,)+lst if not x.uop.has_buffer_identity()]):
       run_schedule(*Tensor.schedule_with_vars(*to_realize), do_update_stats=do_update_stats)
     return self
@@ -323,12 +320,15 @@ class Tensor(OpMixin):
     if is_disk:
       self._buffer().copyin(x._data())
       return self
-    result = self._apply_uop(UOp.assign, x)
-    # track view assigns (not full-buffer or assign-chain) so they can be side-realized when the buffer is read
-    if (buf_uop:=self.uop.base).op is Ops.BUFFER and self.uop.op is not Ops.ASSIGN and not self.uop.has_buffer_identity():
-      # deduplicate: if the value is already a pending assign for this buffer (e.g. __iadd__ in __setitem__), remove it
-      if x.uop in _pending_assigns.get(buf_uop, []): _pending_assigns[buf_uop].remove(x.uop)
-      _pending_assigns.setdefault(buf_uop, []).append(result.uop)
+    assign_uop = self.uop.assign(x.uop)
+    embed_root = self.uop
+    while embed_root.op is not Ops.AFTER and embed_root is not embed_root.base: embed_root = embed_root.src[0]
+    # for view assigns, append this write to the base AFTER chain so reads of the base realize it in-order
+    if self.uop.op is not Ops.ASSIGN and self.uop is not self.uop.base and not self.uop.has_buffer_identity() and embed_root.op in {Ops.BUFFER, Ops.AFTER}:
+      skip_embed = embed_root.op is Ops.AFTER and any(s is assign_uop for s in embed_root.src[1:])
+      if not skip_embed:
+        _apply_map_to_tensors({embed_root: embed_root.after(assign_uop)}, name="Embed View Assign", walk=True)
+    result = self._apply_uop(lambda *_: assign_uop, x)
     return self.replace(result)
 
   def detach(self) -> Tensor:
@@ -344,7 +344,9 @@ class Tensor(OpMixin):
       raise JitError("cannot access tensor data during JIT capture, the value will be baked in")
     x = self.cast(self.dtype.base).contiguous()
     if isinstance(self.device, tuple): x = x.to("CPU")
-    return cast(Buffer, x.realize().uop.buffer).ensure_allocated()
+    x = x.realize()
+    if not x.uop.has_buffer_identity(): x = x.contiguous().realize()
+    return cast(Buffer, x.uop.buffer).ensure_allocated()
   def _data(self) -> memoryview: return self._buffer().as_memoryview()
 
   def data(self) -> memoryview:
@@ -1352,11 +1354,13 @@ class Tensor(OpMixin):
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
       self.assign(self._getitem(indices, v))
     elif is_disk or self.uop.is_realized: # basic setitem, self is realized. TODO: disk uop.base is a COPY and not realized
-      self[indices].assign(v)
+      view = self[indices]
+      if isinstance(v, Tensor) and _is_redundant_assign(v.uop, view.uop): return
+      view.assign(v)
     else: # basic setitem, self is not realized
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
-      # __iadd__/__isub__ on unrealized views creates a no-op ASSIGN; unwrap to get the computed value
-      if v.uop.op is Ops.ASSIGN: v = v._apply_uop(lambda x: x.src[1])
+      if _is_redundant_assign(v.uop, self.uop): return
+      v = v._apply_uop(lambda x: x.src[1] if x.op is Ops.ASSIGN else x)
       self.replace(self._getitem(indices, v))
 
   def __delitem__(self, indices) -> None:

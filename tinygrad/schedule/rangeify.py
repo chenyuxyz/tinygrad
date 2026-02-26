@@ -141,6 +141,8 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 # 3.5 cleanups
 
 ALWAYS_RUN_OPS = {Ops.CONTIGUOUS, Ops.COPY, Ops.ASSIGN, Ops.ENCDEC, Ops.NOOP}
+AFTER_SIDE_EFFECT_OPS = {Ops.ASSIGN, Ops.RANGE, Ops.STORE, Ops.CALL, Ops.BARRIER, Ops.END, Ops.UNROLL, Ops.LINEAR, Ops.BUFFERIZE}
+AFTER_BUFFER_IDENTITY_OPS = {Ops.BUFFER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.AFTER}
 
 # you don't know in the first pass if axes are going to die, this happens if there's an EXPAND to the left
 def cleanup_dead_axes(b:UOp):
@@ -323,6 +325,17 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
   if (assign := x.src[0]).op is Ops.ASSIGN:
     assign_target, assign_src = assign.src[0], assign.src[1]
     assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
+    # if RHS contains a non-effect AFTER(PARAM, dep), retarget the write to that base PARAM early.
+    # this keeps assign lowering local to BUFFERIZE->STORE and avoids sink-level post-fixes.
+    if assign_target.src[0].op is Ops.PARAM:
+      for a in (u for u in assign_src.toposort() if u.op is Ops.AFTER and len(u.src) == 2 and u.src[0].op is Ops.PARAM):
+        base, dep = a.src
+        target_base = assign_target.src[0]
+        if dep.op in AFTER_SIDE_EFFECT_OPS or base is target_base or target_base.shape == base.shape: continue
+        if base in dep.backward_slice_with_self: continue
+        assign_target = assign_target.replace(src=(base,)+assign_target.src[1:])
+        assign_src = assign_src.substitute({a:base})
+        break
     while assign_src.op is Ops.NOOP: assign_src = assign_src.src[0]
     # skip self-assign from same-device copy, otherwise create the store
     # in assign, this is the buffer size, not the bufferize size
@@ -355,6 +368,14 @@ def flatten_bufferize(x:UOp):
   return ret
 pm_flatten_bufferize = PatternMatcher([(UPat(Ops.BUFFERIZE, name="x"), flatten_bufferize)])
 
+def strip_after_sources(after:UOp) -> UOp|None:
+  base_buf = after.src[0].buf_uop
+  keep_src = tuple(s for s in after.src[1:] if s.op in AFTER_SIDE_EFFECT_OPS or
+                   (s.op in AFTER_BUFFER_IDENTITY_OPS and s.buf_uop is not base_buf) or
+                   any(u.op in AFTER_BUFFER_IDENTITY_OPS and u.buf_uop is not base_buf for u in s.backward_slice))
+  if len(keep_src) == len(after.src)-1: return None
+  return after.src[0].after(*keep_src)
+
 pm_add_buffers = pm_mops+pm_flatten_bufferize+to_bufferview+PatternMatcher([
   (UPat(Ops.BUFFERIZE, src=(UPat(), UPat(name="idx")), name="x"), lambda ctx,x,idx: bufferize_to_store(ctx, x, idx, allow_locals=False)),
 
@@ -368,7 +389,9 @@ pm_add_buffers = pm_mops+pm_flatten_bufferize+to_bufferview+PatternMatcher([
   # remove MOP on AFTER
   (UPat(Ops.AFTER, src=(UPat.var("x"), UPat(GroupOp.Movement, name="y"))), lambda x,y: x.after(y.src[0])),
   # remove double AFTER
-  (UPat(Ops.AFTER, src=(UPat.var("x"), UPat(Ops.AFTER, name="y"))), lambda x,y: x.after(*y.src[1:]))
+  (UPat(Ops.AFTER, src=(UPat.var("x"), UPat(Ops.AFTER, name="y"))), lambda x,y: x.after(*y.src[1:])),
+  # strip non-effect sources from tensor-level AFTER chains while preserving side-effect deps for lowering
+  (UPat(Ops.AFTER, name="a"), lambda a: strip_after_sources(a)),
 ])
 
 pm_add_buffers_local = pm_mops+pm_flatten_bufferize+to_bufferview+PatternMatcher([
