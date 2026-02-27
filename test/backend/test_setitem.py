@@ -282,14 +282,27 @@ class TestWithGrad(unittest.TestCase):
   def test_set_into_requires_grad(self):
     z = Tensor.rand(8, 8, requires_grad=True)
     x = Tensor.rand(8)
-    with self.assertRaises(NotImplementedError):
-      z[:3] = x
+    z[:3] = x
+    loss = z.sum()
+    loss.backward()
+    np.testing.assert_allclose(z.grad.numpy(), np.ones((8, 8)))
 
   def test_set_with_requires_grad(self):
     z = Tensor.rand(8, 8)
     x = Tensor.rand(8, requires_grad=True)
-    with self.assertRaises(NotImplementedError):
-      z[:3] = x
+    z[:3] = x
+    loss = z.sum()
+    loss.backward()
+    np.testing.assert_allclose(x.grad.numpy(), np.full(8, 3.0))
+
+  def test_set_both_requires_grad(self):
+    z = Tensor.rand(8, 8, requires_grad=True)
+    x = Tensor.rand(8, requires_grad=True)
+    z[:3] = x
+    loss = z.sum()
+    loss.backward()
+    np.testing.assert_allclose(z.grad.numpy(), np.ones((8, 8)))
+    np.testing.assert_allclose(x.grad.numpy(), np.full(8, 3.0))
 
 class TestSetitemLoop(unittest.TestCase):
   def test_arange(self):
