@@ -1094,6 +1094,41 @@ class TestSchedule(unittest.TestCase):
       run_schedule(check_schedule(a, 0, filter_sink=False))
       self.assertListEqual(a.tolist(), [[1.]*shape[1]]*shape[0])
 
+  def test_parallel_reduces_share_ops(self):
+    """Three independent reduces over the same dimension should have similar ops to one reduce."""
+    X = Tensor.rand(256, 1000).realize()
+    Y = Tensor.randint(256, low=0, high=10).realize()
+    GlobalCounters.reset()
+    with Context(SPLIT_REDUCEOP=0):
+      X.sparse_categorical_crossentropy(Y, label_smoothing=0.1).realize()
+    ops_builtin = GlobalCounters.global_ops
+    def scc2(self, Y, ignore_index=-1, label_smoothing=0.0):
+      log_probs, loss_mask = self.log_softmax(), (Y != ignore_index)
+      arange = Tensor.arange(log_probs.shape[0], device=self.device)
+      y = log_probs[arange, Y.flatten()] * loss_mask.unsqueeze(0)
+      smoothing = label_smoothing * (log_probs.mean(-1) * loss_mask.unsqueeze(0)).sum()
+      return -((1 - label_smoothing) * y.sum() + smoothing) / loss_mask.sum()
+    GlobalCounters.reset()
+    with Context(SPLIT_REDUCEOP=0):
+      scc2(X, Y, label_smoothing=0.1).realize()
+    ops_scc2 = GlobalCounters.global_ops
+    self.assertLess(ops_scc2 / ops_builtin, 2.0, f"ops ratio too high: {ops_scc2}/{ops_builtin} = {ops_scc2/ops_builtin:.1f}x")
+
+  def test_two_parallel_sums(self):
+    a = Tensor.rand(64, 128).realize()
+    with Context(SPLIT_REDUCEOP=0):
+      out = a.sum(axis=1) + a.mean(axis=1)
+      np.testing.assert_allclose(out.numpy(), a.numpy().sum(axis=1) + a.numpy().mean(axis=1), atol=1e-4)
+
+  def test_sequential_reduces_stay_separate(self):
+    a = Tensor.rand(32, 50).realize()
+    a_np = a.numpy()
+    with Context(SPLIT_REDUCEOP=0):
+      out = a.log_softmax(axis=-1)
+      a_shifted = a_np - a_np.max(axis=-1, keepdims=True)
+      expected = a_shifted - np.log(np.exp(a_shifted).sum(axis=-1, keepdims=True))
+      np.testing.assert_allclose(out.numpy(), expected, atol=1e-5)
+
 class TestLimitBufs(unittest.TestCase):
   @unittest.skipIf(CI and Device.DEFAULT == "NV", "crashes on NV CI")
   def test_limit_bufs_with_var(self):

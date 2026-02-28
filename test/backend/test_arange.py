@@ -43,6 +43,40 @@ class TestArange(unittest.TestCase):
 DSET, DDIM = 2048, 32
 
 class TestIndexing(unittest.TestCase):
+  def test_arange_getitem(self):
+    dataset = Tensor.rand(64, 32).realize()
+    with Context(NOOPT=1):
+      GlobalCounters.reset()
+      out = dataset[Tensor.arange(64)]
+      sched = out.schedule()
+      self.assertEqual(len(sched), 1)
+      run_schedule(sched)
+      assert GlobalCounters.global_ops < 64*64, f"too many ops {GlobalCounters.global_ops}"
+    np.testing.assert_allclose(out.numpy(), dataset.numpy())
+
+  def test_two_arange_getitems(self):
+    a = Tensor.rand(64, 32).realize()
+    b = Tensor.rand(64, 32).realize()
+    with Context(NOOPT=1):
+      GlobalCounters.reset()
+      out = a[Tensor.arange(64)] + b[Tensor.arange(64)]
+      sched = out.schedule()
+      self.assertEqual(len(sched), 1)
+      run_schedule(sched)
+      assert GlobalCounters.global_ops < 64*64, f"too many ops {GlobalCounters.global_ops}"
+    np.testing.assert_allclose(out.numpy(), a.numpy() + b.numpy())
+
+  def test_arange_arange_getitem(self):
+    a = Tensor.rand(64, 64).realize()
+    with Context(NOOPT=1):
+      GlobalCounters.reset()
+      out = a[Tensor.arange(64), Tensor.arange(64)]
+      sched = out.schedule()
+      self.assertEqual(len(sched), 1)
+      run_schedule(sched)
+      assert GlobalCounters.global_ops < 64*64, f"too many ops {GlobalCounters.global_ops}"
+    np.testing.assert_allclose(out.numpy(), np.diag(a.numpy()))
+
   def test_arange_2_reduce(self):
     needle = Tensor.zeros(16384, dtype=dtypes.int).contiguous()
     needle[1337] = 1
