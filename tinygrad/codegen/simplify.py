@@ -36,8 +36,26 @@ def simplify_merge_adjacent(u:UOp) -> UOp|None:
           u = nidx
   return u
 
+def unify_parallel_reduce_ranges(sink:UOp) -> UOp|None:
+  """Unify ranges of independent parallel reduces with same sizes so GROUPTOP applies consistently."""
+  # group reduces by all their ranges: reduce range sizes (to unify) + output ranges (must match exactly)
+  groups: dict[tuple, list[UOp]] = {}
+  for u in sink.toposort():
+    if u.op is Ops.REDUCE:
+      key = (tuple(r.src[0].arg for r in u.src[1:]), tuple(sorted(id(r) for r in set(u.src[0].ranges) - set(u.src[1:]))))
+      groups.setdefault(key, []).append(u)
+  range_subs: dict[UOp, UOp] = {}
+  for reds in groups.values():
+    # TODO: pick largest independent subset instead of skipping whole group
+    if any(r2 in r1.backward_slice for r1 in reds for r2 in reds if r1 is not r2): continue
+    for red in reds[1:]:
+      for r, c in zip(red.src[1:], reds[0].src[1:]):
+        if r is not c: range_subs[r] = c
+  return sink.substitute(range_subs) if range_subs else None
+
 pm_simplify_ranges = PatternMatcher([
   (UPat((Ops.END, Ops.REDUCE), name="u"), simplify_merge_adjacent),
+  (UPat(Ops.SINK, name="sink"), unify_parallel_reduce_ranges),
 ])
 
 def mark_range_mod(ctx:dict[UOp, UOp|None], r:UOp, c:UOp) -> None:
