@@ -685,21 +685,64 @@ class TestAssignOrdering(unittest.TestCase):
 
   def test_swap_slices(self):
     """Swap two non-overlapping slices - requires reading both before writing."""
-    # without .realize() on temps: values not captured before overwriting
+    # single realize: WAR detection orders contiguous reads before assign writes
     buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
-    left = buf[0:4].contiguous()  # lazy - not captured yet
-    right = buf[4:8].contiguous()  # lazy - not captured yet
-    buf[0:4].assign(right).realize()  # this works
-    buf[4:8].assign(left).realize()  # left now reads from modified buf!
-    np.testing.assert_equal(buf.numpy(), [5, 6, 7, 8, 5, 6, 7, 8])  # TODO: wrong! should be [5,6,7,8,1,2,3,4]
-
-    # with .realize() on temps: values captured before writes
-    buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
-    left = buf[0:4].contiguous().realize()
-    right = buf[4:8].contiguous().realize()
-    buf[0:4].assign(right).realize()
-    buf[4:8].assign(left).realize()
+    left = buf[0:4].contiguous()
+    right = buf[4:8].contiguous()
+    buf[0:4].assign(right)
+    buf[4:8].assign(left)
+    buf.realize()
     np.testing.assert_equal(buf.numpy(), [5, 6, 7, 8, 1, 2, 3, 4])
+
+  def test_derived_from_contiguous_before_assign(self):
+    """Tensors derived from a contiguous read should see pre-assign data, same as the contiguous itself."""
+    buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
+    left = buf[0:4].contiguous()
+    derived = left + 10
+    right = buf[4:8].contiguous()
+    buf[0:4].assign(right)
+    Tensor.realize(buf, left, derived)
+    np.testing.assert_equal(left.numpy(), [1, 2, 3, 4])
+    np.testing.assert_equal(derived.numpy(), [11, 12, 13, 14])
+
+  def test_view_of_contiguous_before_assign(self):
+    """A view of a contiguous read should see the same pre-assign data as the contiguous."""
+    buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
+    c = buf[0:4].contiguous()
+    v = c[0:2]
+    right = buf[4:8].contiguous()
+    buf[0:4].assign(right)
+    Tensor.realize(buf, c, v)
+    np.testing.assert_equal(c.numpy(), [1, 2, 3, 4])
+    np.testing.assert_equal(v.numpy(), [1, 2])
+
+  def test_gc_contiguous_derived(self):
+    """GC'd intermediate: no named reference to the contiguous tensor, but its UOp still exists in derived's graph."""
+    buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
+    derived = buf[0:4].contiguous() + 10
+    right = buf[4:8].contiguous()
+    buf[0:4].assign(right)
+    Tensor.realize(buf, derived)
+    np.testing.assert_equal(derived.numpy(), [11, 12, 13, 14])
+
+  def test_gc_contiguous_reshaped(self):
+    """GC'd intermediate: contiguous().reshape() chain where the contiguous tensor is garbage collected."""
+    buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
+    v = buf[0:4].contiguous().reshape(2, 2)
+    right = buf[4:8].contiguous()
+    buf[0:4].assign(right)
+    Tensor.realize(buf, v)
+    np.testing.assert_equal(v.numpy(), [[1, 2], [3, 4]])
+
+  def test_mixed_contiguous_and_direct(self):
+    """Tensor reads both through contiguous (snapshot) and directly from buffer."""
+    buf = Tensor([1, 2, 3, 4, 5, 6, 7, 8]).contiguous().realize()
+    c = buf[0:4].contiguous()
+    t = c + buf[4:8]
+    buf[0:4].assign(Tensor([9, 10, 11, 12]))
+    Tensor.realize(buf, c, t)
+    np.testing.assert_equal(c.numpy(), [1, 2, 3, 4])
+    np.testing.assert_equal(t.numpy(), [1+5, 2+6, 3+7, 4+8])
 
   def test_reduction_after_partial_assign(self):
     """Reduction over buffer after partial assign - must see the assigned values."""
