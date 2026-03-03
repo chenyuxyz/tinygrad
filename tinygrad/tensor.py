@@ -310,7 +310,17 @@ class Tensor(OpMixin):
     assign_uop = self.uop.assign(x.uop)
     base = self.uop.base
     if base.op in {Ops.BUFFER, Ops.AFTER} and not self.uop.has_buffer_identity():
-      _apply_map_to_tensors({base: base.after(assign_uop)}, name="Embed View Assign", walk=True)
+      # copy barriers (clone/copy to a different buffer) must read pre-assign data
+      buf, orig_map = base.buf_uop, {base: base.after(assign_uop)}
+      reverse_map: dict[UOp, UOp] = {}
+      for tref in list(all_tensors):
+        if (t:=tref()) is None: continue
+        for u in t.uop.backward_slice_with_self:
+          is_barrier = (u.op is Ops.ASSIGN and u.src[0].buf_uop is not buf) or u.op is Ops.COPY
+          if is_barrier and buf in u.backward_slice:
+            if (nc:=u.substitute(orig_map, walk=True)) is not u: reverse_map[nc] = u
+      _apply_map_to_tensors(orig_map, name="Embed View Assign", walk=True)
+      if reverse_map: _apply_map_to_tensors(reverse_map, name="Restore copy barrier readers", walk=True)
     return self.replace(self._apply_uop(lambda *_: assign_uop, x))
 
   def detach(self) -> Tensor:
