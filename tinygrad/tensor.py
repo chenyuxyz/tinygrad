@@ -310,7 +310,23 @@ class Tensor(OpMixin):
     assign_uop = self.uop.assign(x.uop)
     base = self.uop.base
     if base.op in {Ops.BUFFER, Ops.AFTER} and not self.uop.has_buffer_identity():
-      _apply_map_to_tensors({base: base.after(assign_uop)}, name="Embed View Assign", walk=True)
+      # CONTIGUOUS is a copy barrier — reads must complete before assign writes.
+      # pre-compute substituted→original mapping for all CONTIGUOUS UOps reading this buffer
+      buf = base.buf_uop
+      orig_map = {base: base.after(assign_uop)}
+      reverse_map: dict[UOp, UOp] = {}
+      seen: set[int] = set()
+      for tref in list(all_tensors):
+        t = tref()
+        if t is None: continue
+        for u in t.uop.backward_slice_with_self:
+          if u.op is Ops.CONTIGUOUS and id(u) not in seen:
+            seen.add(id(u))
+            if buf in u.backward_slice:
+              nc = u.substitute(orig_map, walk=True)
+              if nc is not u: reverse_map[nc] = u
+      _apply_map_to_tensors(orig_map, name="Embed View Assign", walk=True)
+      if reverse_map: _apply_map_to_tensors(reverse_map, name="Restore CONTIGUOUS readers", walk=True)
     return self.replace(self._apply_uop(lambda *_: assign_uop, x))
 
   def detach(self) -> Tensor:
