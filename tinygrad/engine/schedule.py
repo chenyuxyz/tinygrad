@@ -11,7 +11,7 @@ from tinygrad.engine.realize import ExecItem
 
 # unwrap VIEW/CAST/etc to find the actual data source (kernel output, buffer, or multi-device op)
 def _unwrap_src(s: UOp) -> UOp:
-  while len(s.src) and s.op not in {Ops.AFTER, Ops.BUFFER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.BIND}: s = s.src[0]
+  while len(s.src) and s.op not in {Ops.AFTER, Ops.BUFFER, Ops.BUFFER_VIEW, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.BIND}: s = s.src[0]
   return s
 
 def create_schedule(sched_sink:UOp) -> UOp:
@@ -39,8 +39,8 @@ def create_schedule(sched_sink:UOp) -> UOp:
                 assert ss.op is Ops.AFTER, f"ss.op is not AFTER, it's {ss.op}"
                 children.setdefault(ss.src[1], []).append(k)
                 in_degree[k] += 1
-          case Ops.BUFFER | Ops.PARAM | Ops.BIND:
-            pass  # BUFFER/PARAM is already realized, BIND is a bound variable (not a buffer dependency)
+          case Ops.BUFFER | Ops.BUFFER_VIEW | Ops.PARAM | Ops.BIND:
+            pass  # BUFFER/BUFFER_VIEW/PARAM is already realized, BIND is a bound variable (not a buffer dependency)
           case _:
             raise RuntimeError(f"input to kernel must be AFTER, BUFFER, PARAM, MSELECT, MSTACK, or BIND, not {s.op}")
 

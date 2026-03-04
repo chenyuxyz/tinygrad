@@ -112,6 +112,13 @@ def resolve_call(c:UOp, allow_param_mismatch=True) -> UOp|None:
     if p.dtype != a.dtype: raise TypeError(f"arg {i} dtype mismatch: expected {p.dtype}, got {a.dtype}")
   return c.src[0].substitute(dict_map, walk=True)
 
+def disk_assign_wrap_copy(assign:UOp, target:UOp, src:UOp):
+  """For DISK assigns, wrap the source in a COPY so it becomes a COPY ExecItem instead of a kernel."""
+  if target.base.op not in {Ops.BUFFER, Ops.PARAM, Ops.AFTER}: return None
+  if not (isinstance(target.base._device, str) and target.base._device.startswith("DISK")): return None
+  if src.op is Ops.COPY and src._device == target.base._device: return None
+  return assign.replace(src=(target, (src.contiguous() if src.base.op is Ops.CONST else src).copy_to_device(target.base._device)))
+
 earliest_rewrites = mop_cleanup+PatternMatcher([
   # early fixup const copy
   (UPat(Ops.COPY, src=(UPat.var("s"), UPat.var("d"))),
@@ -161,6 +168,9 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # make source contiguous if it has hazardous movement ops on the dest buffer
   (UPat(Ops.ASSIGN, src=(UPat.var("target"), UPat.var("src")), name="assign"), fix_assign_hazard),
+
+  # for DISK assigns, wrap source in COPY so it becomes a COPY ExecItem instead of a kernel (DISK has no renderer)
+  (UPat(Ops.ASSIGN, src=(UPat.var("target"), UPat.var("src")), name="assign"), disk_assign_wrap_copy),
 
   # ** size 0 **
 
@@ -520,7 +530,16 @@ def split_store(x:UOp) -> UOp|None:
   if ret.op is Ops.STORE: stored = ret.src[1]
   elif ret.op is Ops.END and ret.src[0].op is Ops.STORE: stored = ret.src[0].src[1]
   else: raise RuntimeError(f"unknown kernel type {ret.op}")
-  if stored.op in {Ops.COPY, Ops.BUFFER_VIEW}: ret = stored.replace(src=stored.src + ret.ended_ranges)
+  if stored.op in {Ops.COPY, Ops.BUFFER_VIEW}:
+    # for COPY to DISK with offset, replace output buffer with BUFFER_VIEW so BufferCopy writes at correct offset
+    if stored.op is Ops.COPY:
+      idx = (ret.src[0] if ret.op is Ops.END else ret).src[0]
+      out_key, out_buf = next(iter(lctx.map.items()))
+      if idx.op is Ops.INDEX and len(idx.src) > 1 and isinstance(out_buf._device, str) and out_buf._device.startswith(("DISK", "TINYFS")):
+        offset, out_size = idx.src[1].vmin, idx.src[1].vmax - idx.src[1].vmin + 1
+        if offset > 0 or out_buf.size != out_size:
+          lctx.map[out_key] = UOp(Ops.BUFFER_VIEW, out_buf.dtype, (out_buf,), (out_size, offset))
+    ret = stored.replace(src=stored.src + ret.ended_ranges)
   elif stored.op is Ops.ENCDEC: ret = stored
   else: ret = ret.sink(arg=KernelInfo(opts_to_apply=lctx.opts))
 
