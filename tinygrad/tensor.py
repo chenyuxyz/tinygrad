@@ -301,17 +301,30 @@ class Tensor(OpMixin):
     if not is_disk and self.dtype != x.dtype: raise RuntimeError(f"assign dtype mismatch {self.dtype} != {x.dtype}")
     if isinstance(self.device, tuple) and self.uop.axis != x.uop.axis: raise RuntimeError(f"multi axis mismatch {self.uop.axis} != {x.uop.axis}")
 
-    # TODO: this is a hack for writing to DISK. remove with working assign
-    if is_disk:
-      self._buffer().copyin(x._data())
+    # cross-size BITCAST on disk can't be compiled as a kernel — handle eagerly
+    if is_disk and self.uop.base.op is Ops.BITCAST:
+      self._buffer().copyin(x.to("CPU")._data())
       return self
+    # strided disk views (e.g. dt[::2]) can't be represented as a contiguous BUFFER_VIEW
+    if is_disk and not self.uop.has_buffer_identity() and self.uop.contiguous_view_offset() is None:
+      raise RuntimeError(f"cannot collapse movement ops on {self.uop.base.op} to a contiguous view")
+    # for disk view assigns, the disk file must exist before writing to a slice — realize the base tensor first
+    base = self.uop.base
+    if is_disk and not self.uop.has_buffer_identity() and base.op not in {Ops.BUFFER, Ops.AFTER}:
+      for tref in list(all_tensors):
+        if (t_root:=tref()) is not None and t_root.uop is base:
+          t_root.realize()
+          break
+      base = self.uop.base
     # NOTE: assign_uop is created before AFTER embedding (uses original self.uop),
     # but AFTER must be embedded before _apply_uop (so subsequent assigns see it)
     assign_uop = self.uop.assign(x.uop)
-    base = self.uop.base
     if base.op in {Ops.BUFFER, Ops.AFTER} and not self.uop.has_buffer_identity():
       _apply_map_to_tensors({base: base.after(assign_uop)}, name="Embed View Assign", walk=True)
-    return self.replace(self._apply_uop(lambda *_: assign_uop, x))
+    ret = self.replace(self._apply_uop(lambda *_: assign_uop, x))
+    # disk assigns must be realized immediately — callers expect data to be written
+    if is_disk: ret.realize()
+    return ret
 
   def detach(self) -> Tensor:
     """
@@ -1338,6 +1351,8 @@ class Tensor(OpMixin):
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
       self.assign(self._getitem(indices, v))
     elif is_disk or self.uop.is_realized or self.uop.base.op is Ops.AFTER: # basic setitem, self is realized
+      # for disk tensors, realize the initial buffer first so the file exists before writing to a slice
+      if is_disk and not (self.uop.is_realized or self.uop.base.op is Ops.AFTER): self.realize()
       view = self[indices]
       if isinstance(v, Tensor) and v.uop.op is Ops.ASSIGN and v.uop in view.uop.base.src: return
       view.assign(v)

@@ -19,8 +19,9 @@ def realize_srcs(ctx:dict[UOp, None], rb:UOp) -> None:
 
 def realize_assign_src(ctx:dict[UOp, None], buf:UOp, x:UOp):
   # don't realize COPY/BUFFER_VIEW/ENCDEC when they are the direct source of ASSIGN — the ASSIGN target buffer is the output
+  is_disk = isinstance(buf.base._device, str) and buf.base._device.startswith(("DISK", "TINYFS"))
   if x.op in {Ops.COPY, Ops.BUFFER_VIEW, Ops.ENCDEC} and x in ctx \
-     and not buf.op_in_backward_slice_with_self(Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD):
+     and (is_disk or not buf.op_in_backward_slice_with_self(Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD)):
     del ctx[x]
   # you don't usually have to do this for assign unless there's a WAR hazard like TestAssign.test_assign_double_diamond_reduce
   if buf.base in x.backward_slice_with_self: ctx[x] = None
