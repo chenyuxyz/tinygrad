@@ -48,7 +48,7 @@ def fold_divmod_general(d: UOp, correct_divmod_folding: bool) -> UOp|None:
 
     # fold_divmod_congruence: fold if a is congruent to an expression whose range is between 0 and c
     if not (x.vmin<0 and correct_divmod_folding):
-      rems = [min((r:=f%c), r-c, key=abs) for f in factors]
+      rems = [min((r:=f%c), r-c, key=lambda x: (abs(x), x > 0)) for f in factors]
       if (rem:=sum(r*v for r,v in zip(rems,terms))+const%c).vmin//c==rem.vmax//c:
         if d.op is Ops.MOD: return rem - rem.vmin//c*c
         return sum((f-r)//c * v for f,r,v in zip(factors,rems,terms)) + (const-const%c+rem.vmin//c*c)//c

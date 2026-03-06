@@ -293,6 +293,12 @@ class TestSymbolic(unittest.TestCase):
   def test_div_congruence_multiple_vars(self):
     self.helper_test_variable((9+(9+10)*Variable("x",0,3)+(8+10)*Variable("y",0,2))//10, 0, 10, "((x*2)+(y*2))")
 
+  def test_divmod_congruence_half_divisor_tie(self):
+    r2 = Variable("r2", 0, 1)
+    r3 = Variable("r3", 0, 1)
+    self.helper_test_variable((r2*2+r3*3+3)%4, 0, 3, "(((r2*-2)+(r3*-1))+3)")
+    self.helper_test_variable((r2*2+r3*3+3)//4, 0, 2, "(r2+r3)")
+
   def test_mod_binary_expression(self):
     self.helper_test_variable((3+Variable("a",0,1))%4, 0, 3, "((a*-3)+3)")
     self.helper_test_variable((3+Variable("a",4,5))%4, 0, 3, "((a*-3)+15)")
