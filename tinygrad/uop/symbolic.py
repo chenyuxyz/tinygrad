@@ -242,6 +242,8 @@ symbolic = symbolic_simple+commutative+PatternMatcher([
   # generic lt folding
   (UPat.var("x", dtypes.index)<UPat.cvar("c", vec=False), lambda x,c: lt_folding(x, c.arg) if 0 < c.arg else None),
   (UPat.var("x", dtypes.index)*-1 < UPat.var("y")*-1, lambda x,y: y<x),
+  ((UPat.var("x", dtypes.index)<UPat.cvar("c", vec=False)).ne(True),
+   lambda x,c: (-x) < (1-c.arg) if c.arg != 1 and len(x.ranges) and not x.op_in_backward_slice_with_self(Ops.SPECIAL, Ops.DEFINE_VAR) else None),
   # canonicalize a simplex with positive coefficients > 0. NOTE: not x < 1 means x > 0
   ((UPat.var("x", dtypes.index)<1).ne(True), lambda x: (newx<1).ne(True) if (newx:=canonicalize_simplex(x)) is not None else None),
   # a range mod its own upper bound is just the range
