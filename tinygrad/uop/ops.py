@@ -783,11 +783,6 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
     return None # generic None if we aren't sure
   def pop_const(self, op=Ops.ADD) -> tuple[UOp, PyConst]:  # NOTE: assume Invalid ALU is resolved
     return (self.src[0], self.src[1].arg) if self.op is op and self.src[1].op is Ops.CONST else (self, identity_element(op, self.dtype))
-  @staticmethod
-  def gcd(*uops: UOp) -> UOp:
-    terms, factors = zip(*[(u.divides(f:=u.const_factor()),f) for u in uops])
-    count = functools.reduce(operator.and_, [collections.Counter(term.split_uop(Ops.MUL)) for term in terms])
-    return math.prod([*count.elements(), terms[0].const_like(math.gcd(*factors))])  # put the const at the top
   def divide_exact(self, v:UOp) -> UOp|None:
     if self is v: return self.const_like(1)
     if v.op is Ops.CONST: return self.divides(v.arg)

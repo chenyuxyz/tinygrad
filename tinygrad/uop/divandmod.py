@@ -1,4 +1,4 @@
-import functools, itertools, math
+import functools, itertools, math, collections, operator
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp
 from tinygrad.dtype import dtypes
 from tinygrad.helpers import cdiv, cmod, CORRECT_DIVMOD_FOLDING, unwrap
@@ -83,7 +83,9 @@ def fold_divmod_general(d: UOp, correct_divmod_folding: bool) -> UOp|None:
   all_uops = list(x.split_uop(Ops.ADD))
 
   # divide_by_gcd: x//y -> (x//gcd)//(y//gcd)
-  gcd = UOp.gcd(*all_uops, y).simplify()
+  gcd_terms, gcd_factors = zip(*[(u.divides(f:=u.const_factor()),f) for u in [*all_uops, y]])
+  count = functools.reduce(operator.and_, [collections.Counter(t.split_uop(Ops.MUL)) for t in gcd_terms])
+  gcd = math.prod([*count.elements(), x.const_like(math.gcd(*gcd_factors))]).simplify()
   if not (gcd.op is Ops.CONST and gcd.arg==1):
     ret = unwrap(x.divide_exact(gcd)).alu(d.op, unwrap(y.divide_exact(gcd)))
     return ret*gcd if d.op is Ops.MOD else ret

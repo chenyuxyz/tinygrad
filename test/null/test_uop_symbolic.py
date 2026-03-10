@@ -98,15 +98,6 @@ class TestSymbolic(unittest.TestCase):
     assert idx1+idx2 is not idx2
     assert idx1*idx2 is not idx2*idx1
 
-  def test_uop_gcd_method(self):
-    a = Variable("a", 0, 8)
-    b = Variable("b", 0, 8)
-    self.assertEqual(UOp.gcd(a, a*b, a*3).simplify(), a)
-    self.assertEqual(UOp.gcd(a*a*a, a*b*a, a*3*a).simplify(), a*a)
-    self.assertEqual(UOp.gcd(a*a*10, b*a*5, a*a*5).simplify(), a*5)
-    self.assertEqual(UOp.gcd(a*10, b*5, a*5).simplify(), a.const_like(5))
-    self.assertEqual(UOp.gcd(a, b*5, a*5).simplify(), a.const_like(1))
-
   def test_divides_exact(self):
     a = Variable("a", 1, 8)
     b = Variable("b", 1, 8)
