@@ -3,6 +3,8 @@ from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp
 from tinygrad.dtype import dtypes
 from tinygrad.helpers import cdiv, cmod, CORRECT_DIVMOD_FOLDING, unwrap
 
+def count_divmod(x: UOp) -> int: return sum(u.op in {Ops.IDIV, Ops.MOD} for u in x.backward_slice)
+
 # NOTE: this cache is only on index UOps
 @functools.cache
 def fold_divmod_general(d: UOp, correct_divmod_folding: bool) -> UOp|None:
@@ -71,13 +73,13 @@ def fold_divmod_general(d: UOp, correct_divmod_folding: bool) -> UOp|None:
       for div in {abs(f) for u, f in zip(uops_no_const, factors) if u.op not in (Ops.CONST, Ops.VCONST) and 1 < abs(f) < c and (c%f)==0}:
         if (newxs := fold_divmod_general(x//div, correct_divmod_folding)) is not None and newxs.vmin >= 0:
           if d.op is Ops.IDIV:
-            results.append((len(newxs.backward_slice), newxs // (c // div)))
+            results.append((count_divmod(newxs // (c // div)), newxs // (c // div)))
           else:
             b_parts = [f%div*t for f, t in zip(factors, terms) if f%div]
             if const % div: b_parts.append(x.const_like(const % div))
             b = UOp.sum(*b_parts) if b_parts else x.const_like(0)
             if 0 <= b.vmin and b.vmax < div:
-              results.append((len((r:=(newxs % x.ufix(c//div))*div + b).backward_slice), r))
+              results.append((count_divmod(r:=(newxs % x.ufix(c//div))*div + b), r))
       if results: return min(results, key=lambda r: r[0])[1]
 
   # ** Variable Denominator / Fallback Rules **
