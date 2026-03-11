@@ -2,7 +2,7 @@ from dataclasses import dataclass, field, replace
 import itertools
 from tinygrad.dtype import dtypes, PtrDType, ImageDType, AddrSpace, Invalid
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, _substitute, KernelInfo
-from tinygrad.uop.ops import graph_rewrite, sint, AxisType, BottomUpGate, profile_matches, should_resolve_call, identity_element
+from tinygrad.uop.ops import graph_rewrite, AxisType, BottomUpGate, profile_matches, should_resolve_call, identity_element
 from tinygrad.uop.symbolic import symbolic
 from tinygrad.helpers import prod, all_same, getenv, dedup, all_int, DEBUG, SPLIT_REDUCEOP, DEBUG_RANGEIFY, VIZ, MAX_KERNEL_BUFFERS
 from tinygrad.helpers import PCONTIG, FLOAT16, OPENPILOT_HACKS, argsort, partition, get_single_element
@@ -176,27 +176,6 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
 ALWAYS_RUN_OPS = {Ops.CONTIGUOUS, Ops.COPY, Ops.ASSIGN, Ops.NOOP}
 
-# you don't know in the first pass if axes are going to die, this happens if there's an EXPAND to the left
-def cleanup_dead_axes(b:UOp):
-  # don't optimize ALWAYS_RUN_OPS
-  if b.src[0].op in ALWAYS_RUN_OPS: return None
-
-  new_rng = []
-  hit = False
-  reshape: list[sint] = []
-  for s,rng in zip(b.shape, b.src[1:]):
-    # skip for symbolic. TODO: fix this
-    if rng.op is Ops.RANGE and rng.src[0].op is not Ops.CONST: return None
-    # CONSTs are already dead axes
-    if rng.op is Ops.CONST or (rng.op is Ops.RANGE and rng not in b.src[0].ranges):
-      reshape.append(1)
-      hit = True
-    else:
-      reshape.append(s)
-      new_rng.append(rng)
-  if hit:
-    return b.replace(src=b.src[0:1]+tuple(new_rng)).reshape(tuple(reshape)).expand(b.shape)
-
 def gate_substitute(ctx, b:UOp) -> None:
   if not any(r in b.ranges for r in ctx.keys()): raise BottomUpGate()
 pm_gate_substitute = PatternMatcher([(UPat(GroupOp.All, name="b"), gate_substitute)], compiled=False)
@@ -272,7 +251,6 @@ def remove_noop_bufferize(idx,b2):
   return idx.src[0].shrink(tuple((0, s) for s in b2.shape)) if b2.shape else idx.src[0]
 
 pm_const_buffer_folding = pm_mops+PatternMatcher([
-  (UPat(Ops.BUFFERIZE, name="b"), cleanup_dead_axes),
   (UPat(GroupOp.All-{Ops.BUFFERIZE, Ops.PARAM}, name="x"), lambda x: x.replace(dtype=x.dtype.base) if isinstance(x.dtype, ImageDType) else None),
   (UPat((Ops.BUFFERIZE), name="x"), lambda x: x.replace(dtype=x.dtype.base) if isinstance(x.dtype, ImageDType)
     and (resolve(prod(x.dtype.shape)!=prod(x.shape)) or x.shape[-1]%4!=0) else None),
