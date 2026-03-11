@@ -42,10 +42,10 @@ def fold_add_divmod_recombine(x:UOp) -> UOp|None:
       if not exact and base.op is Ops.IDIV and base.src[1].op is Ops.CONST:
         exact = q.op is Ops.IDIV and q.src[1].op is Ops.CONST and q.src[0] is base.src[0] and q.src[1].arg == base.src[1].arg*div
       if exact: return functools.reduce(operator.add, (t for k,t in enumerate(terms) if k not in (i,j)), base*mul)
-      # ((base//div)%d)*div + base%div -> base%(div*d)
-      if mul == 1 and div > 0 and q.op is Ops.MOD and q.src[1].op is Ops.CONST and (d:=q.src[1].arg) > 0 and q.src[0].op is Ops.IDIV:
+      # ((base//div)%d)*(div*mul) + (base%div)*mul -> (base%(div*d))*mul
+      if div > 0 and q.op is Ops.MOD and q.src[1].op is Ops.CONST and (d:=q.src[1].arg) > 0 and q.src[0].op is Ops.IDIV:
         if q.src[0].src[0] is base and q.src[0].src[1].op is Ops.CONST and q.src[0].src[1].arg == div:
-          return functools.reduce(operator.add, (t for k,t in enumerate(terms) if k not in (i,j)), base % (div*d))
+          return functools.reduce(operator.add, (t for k,t in enumerate(terms) if k not in (i,j)), base % (div*d) * mul)
   return None
 
 # this needs to be before symbolic so that 0*something_that_might_be_invalid doesnt become 0
@@ -69,7 +69,7 @@ propagate_invalid = PatternMatcher([
   (UPat(Ops.BITCAST, src=(invalid_gate,), name="bc"), lambda bc,cond,x,i: cond.where(x.bitcast(bc.dtype), i.bitcast(bc.dtype))),
 ])
 
-symbolic_simple = propagate_invalid + PatternMatcher([
+symbolic_simple = PatternMatcher([
   # ** self folding **
   (UPat.var("x") + 0, lambda x: x),    # x+0 -> x
   (UPat.var("x") * 1, lambda x: x),    # x*1 -> x
@@ -415,6 +415,7 @@ pm_simplify_valid = PatternMatcher([
 
 # this is symbolic 2.0
 REMOVE_FROM_SINK_LIKE = {Ops.UNROLL, Ops.NOOP, Ops.VECTORIZE, Ops.SINK}
+sym_bpm = propagate_invalid+PatternMatcher([(invalid_gate, gated_given_valid)])
 sym = symbolic+pm_simplify_valid+PatternMatcher([
   # reorder ALU/VECTORIZE
   (UPat(GroupOp.ALU, src=(UPat(Ops.VECTORIZE, src=UPat(name='x')), UPat(Ops.VECTORIZE, src=UPat(name='y'))), name='alu'),
