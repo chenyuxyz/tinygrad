@@ -369,9 +369,9 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
   def simplify(self, tracked=False):
     if self.op in {Ops.CONST, Ops.VCONST}: return self
     # late import!
-    from tinygrad.uop.symbolic import symbolic
+    from tinygrad.uop.symbolic import symbolic, propagate_invalid
     with Context(TRACK_MATCH_STATS=0 if not tracked else TRACK_MATCH_STATS.value):
-      return graph_rewrite(self, symbolic, name="simplify")
+      return graph_rewrite(self, symbolic, bpm=propagate_invalid, name="simplify")
   def ssimplify(self) -> UOp|ConstType: return ret.arg if (ret:=self.simplify()).op is Ops.CONST else ret
   def sintify(self) -> sint: return self.arg if self.op is Ops.CONST else self
   def _eval(self, dtype, expected_type:Type[T]) -> T:
@@ -666,8 +666,9 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
   def contiguous_view_offset(self) -> int|None:
     """If movement ops on a BUFFER collapse to a contiguous range, return `offset` in elements. Otherwise None."""
     from tinygrad.schedule.rangeify import pm_mops
-    from tinygrad.uop.symbolic import symbolic
-    out = graph_rewrite(self._mop(Ops.RESHAPE, (self.size,)).index(UOp.range(self.size, 0)), pm_mops+symbolic, name="contiguous_view_offset")
+    from tinygrad.uop.symbolic import symbolic, propagate_invalid
+    out = graph_rewrite(self._mop(Ops.RESHAPE, (self.size,)).index(UOp.range(self.size, 0)), pm_mops+symbolic, bpm=propagate_invalid,
+                        name="contiguous_view_offset")
     if out.op is not Ops.INDEX: return None
     if out.src[1].op is Ops.CONST and self.size == 1:
       if not isinstance(out.src[1].arg, int): return None  # masked/padded regions produce InvalidType
