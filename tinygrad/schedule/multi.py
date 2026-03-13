@@ -147,7 +147,8 @@ multi_pm = PatternMatcher([
     UOp(root.op, root.dtype, tuple(x.src[0] if x.op is Ops.MULTI else x for x in root.src), root.arg)),
   (UPat((Ops.CAST, Ops.BITCAST, Ops.CONTIGUOUS, Ops.DETACH, Ops.CONTIGUOUS_BACKWARD),
         src=(UPat(Ops.MULTI, name="multi"), ), name="root"), passthrough_multi),
-  # after CALL
-  (UPat(Ops.AFTER, src=(UPat(Ops.MULTI, name="multi"), UPat(Ops.CALL)), name="a"),
-    lambda multi,a: a.replace(src=(multi.src[0],)+a.src[1:]).multi(multi.axis)),
+  # STORE is an effect, just strip MULTI from its sources. AFTER carries the shape/MULTI.
+  (UPat(Ops.STORE, custom_early_reject={Ops.MULTI}, name="root"),
+    lambda root: root.replace(src=tuple(x.src[0] if x.op is Ops.MULTI else x for x in root.src))),
+  (UPat(Ops.AFTER, src=(UPat(Ops.MULTI, name="multi"),), allow_any_len=True, name="root"), passthrough_multi),
 ])+replace_allreduce

@@ -4,6 +4,13 @@ from tinygrad.uop.ops import PatternMatcher, UPat, GroupOp, Ops, UOp, print_uops
 from tinygrad.dtype import DType, ImageDType, dtypes, PtrDType, AddrSpace, Invalid, ConstFloat
 from tinygrad.helpers import DEBUG, Context, prod, SPEC, Metadata, panic, CHECK_OOB
 
+def validate_tensor_store(dst:UOp, src:UOp):
+  # Narrow tensor-graph STORE form used only for guarded precompiled-call outputs.
+  base = dst
+  while base.op in GroupOp.Movement: base = base.src[0]
+  if base.op is not Ops.PARAM: return None
+  return src._shape is not None and base.dtype.base == src.dtype.base
+
 def validate_index(buf:UOp, idx:UOp, gate:UOp|None=None):
   if idx.op is Ops.CONST and idx.arg is Invalid: return True
   if gate is None: gate = UOp.const(dtypes.bool, True)
@@ -95,6 +102,8 @@ _tensor_spec = PatternMatcher([
 
   # ASSIGN has a target and a value. It can also optionally depend on other assigns
   (UPat(Ops.ASSIGN, name="x"), lambda x: len(x.src) >= 2 and all(s.op is Ops.ASSIGN for s in x.src[2:])),
+  # guarded allocation-time materialization for precompiled call outputs
+  (UPat(Ops.STORE, src=(UPat.var("dst"), UPat.var("src"))), validate_tensor_store),
 
   # MSELECT chooses one of the multi buffers
   (UPat(Ops.MSELECT, name="x"), lambda x: isinstance(x.src[0].device, tuple) and x.arg < len(x.src[0].device)),

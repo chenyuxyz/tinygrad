@@ -27,7 +27,8 @@ def realize_assign_src(ctx:dict[UOp, None], buf:UOp, x:UOp):
 
 pm_generate_realize_map = PatternMatcher([
   # always realize
-  (UPat({Ops.COPY, Ops.CONTIGUOUS, Ops.STORE, Ops.ASSIGN}, name="tr"), realize),
+  (UPat({Ops.COPY, Ops.CONTIGUOUS, Ops.ASSIGN}, name="tr"), realize),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE)), allow_any_len=True, name="tr"), realize),
   # realize srcs of these
   (UPat((Ops.COPY, Ops.MSELECT, Ops.MSTACK), name="rb"), realize_srcs),
   # sometimes realize src of assign
@@ -163,8 +164,9 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
     # no ranges on kernels, they are internal
     if x.op in {Ops.CALL, Ops.LINEAR}: continue
 
-    # no range on after
-    if x.op is Ops.AFTER: continue
+    # AFTER is only rangeified when realized (i.e. carries a STORE effect). void STORE gets info propagated from AFTER below.
+    if x.op is Ops.AFTER and x not in rctx.realize_map: continue
+    if x.op is Ops.STORE and x._shape is None: continue
 
     # treat MSTACK/MSELECT like SINK
     if x.op in {Ops.MSTACK, Ops.MSELECT}: continue
@@ -263,6 +265,10 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
 
     # assign to the range map. rngs are the input ranges, out_rngs are the output ranges, from the x op.
     rctx.range_map[x] = (rngs, out_rngs)
+    # propagate realize/range info from AFTER to its void STORE sources so existing STORE handling in bufferize works
+    if x.op is Ops.AFTER and x in rctx.realize_map:
+      for s in x.src[1:]:
+        if s.op is Ops.STORE: rctx.realize_map[s], rctx.range_map[s] = rctx.realize_map[x], rctx.range_map[x]
 
   tsink = graph_rewrite(tsink, pm_apply_rangeify, ctx=rctx, bottom_up=True, name="apply rangeify")
   return tsink, rctx
