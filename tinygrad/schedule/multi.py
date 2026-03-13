@@ -111,6 +111,18 @@ def assign_multi(dest:UOp, src:UOp):
   if dest.axis != src.axis: raise RuntimeError(f"axis must match in assign {dest.axis} != {src.axis}")
   return dest.src[0].assign(src.src[0]).multi(src.axis)
 
+def demulti_matching_axis(axis:int, multi:UOp):
+  if multi.axis != axis: raise RuntimeError(f"axis must match in AFTER {multi.axis} != {axis}")
+  return multi.src[0]
+
+pm_strip_matching_multi = PatternMatcher([(UPat(Ops.MULTI, name="multi"), lambda ctx,multi: demulti_matching_axis(ctx, multi))])
+
+def strip_matching_multi(axis:int, x:UOp):
+  return graph_rewrite(x, pm_strip_matching_multi, ctx=axis)
+
+def after_multi(multi:UOp, a:UOp):
+  return multi.src[0].after(*(strip_matching_multi(multi.axis, x) for x in a.src[1:])).multi(multi.axis)
+
 def passthrough_multi(root:UOp, multi:UOp):
   return UOp(root.op, root.dtype, (multi.src[0],)+tuple(x.src[0] if x.op is Ops.MULTI else x for x in root.src[1:]), root.arg).multi(multi.axis)
 
@@ -147,7 +159,5 @@ multi_pm = PatternMatcher([
     UOp(root.op, root.dtype, tuple(x.src[0] if x.op is Ops.MULTI else x for x in root.src), root.arg)),
   (UPat((Ops.CAST, Ops.BITCAST, Ops.CONTIGUOUS, Ops.DETACH, Ops.CONTIGUOUS_BACKWARD),
         src=(UPat(Ops.MULTI, name="multi"), ), name="root"), passthrough_multi),
-  # after CALL
-  (UPat(Ops.AFTER, src=(UPat(Ops.MULTI, name="multi"), UPat(Ops.CALL)), name="a"),
-    lambda multi,a: a.replace(src=(multi.src[0],)+a.src[1:]).multi(multi.axis)),
+  (UPat(Ops.AFTER, src=(UPat(Ops.MULTI, name="multi"),), allow_any_len=True, name="a"), after_multi),
 ])+replace_allreduce

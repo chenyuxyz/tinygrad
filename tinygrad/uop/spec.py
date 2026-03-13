@@ -23,6 +23,13 @@ def validate_index(buf:UOp, idx:UOp, gate:UOp|None=None):
   from tinygrad.uop.validate import validate_index_with_z3
   return validate_index_with_z3(sz, idx, gate)
 
+def validate_tensor_store(dst:UOp, src:UOp):
+  # Narrow tensor-graph STORE form used only for guarded precompiled-call outputs.
+  base = dst
+  while base.op in GroupOp.Movement: base = base.src[0]
+  if base.op is not Ops.PARAM: return None
+  return src._shape is not None and base.dtype.base == src.dtype.base
+
 # four specs:
 #   shared_spec  -- usable anywhere
 #   tensor_spec  -- usable in tensor graph
@@ -95,6 +102,8 @@ _tensor_spec = PatternMatcher([
 
   # ASSIGN has a target and a value. It can also optionally depend on other assigns
   (UPat(Ops.ASSIGN, name="x"), lambda x: len(x.src) >= 2 and all(s.op is Ops.ASSIGN for s in x.src[2:])),
+  # guarded allocation-time materialization for precompiled call outputs
+  (UPat(Ops.STORE, src=(UPat.var("dst"), UPat.var("src"))), validate_tensor_store),
 
   # MSELECT chooses one of the multi buffers
   (UPat(Ops.MSELECT, name="x"), lambda x: isinstance(x.src[0].device, tuple) and x.arg < len(x.src[0].device)),

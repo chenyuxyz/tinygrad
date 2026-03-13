@@ -207,7 +207,7 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
   def _shape(self) -> tuple[sint, ...]|None:
     match self.op:
       # late ops don't have shape
-      case Ops.UNIQUE | Ops.LUNIQUE | Ops.DEVICE | Ops.RANGE | Ops.LOAD | Ops.STORE | Ops.IF | Ops.BARRIER | Ops.CUSTOM | Ops.CUSTOMI | \
+      case Ops.UNIQUE | Ops.LUNIQUE | Ops.DEVICE | Ops.RANGE | Ops.LOAD | Ops.IF | Ops.BARRIER | Ops.CUSTOM | Ops.CUSTOMI | \
            Ops.VECTORIZE | Ops.GEP | Ops.SPECIAL | Ops.UNROLL | Ops.CONTRACT | Ops.SINK | \
            Ops.LINEAR | Ops.PROGRAM | Ops.SOURCE | Ops.BINARY | Ops.INS:
         return None
@@ -302,6 +302,10 @@ class UOp(OpMixin, metaclass=UOpMetaClass):
           return tuple(1 if i in axis_arg else s for i,s in enumerate(ps))
 
     if self.op is Ops.ASSIGN: return self.src[1]._shape
+    if self.op is Ops.STORE:
+      if self.src[0]._shape is not None: return self.src[0]._shape
+      if self.src[1]._shape is not None: return self.src[1]._shape
+      return ()
 
     # elementwise ops keep the shape the same. all inputs with shape must match
     if self.op in GroupOp.ALU.union({Ops.CAST, Ops.COPY, Ops.NOOP, Ops.GROUP, Ops.SINK, Ops.ALLREDUCE}):
