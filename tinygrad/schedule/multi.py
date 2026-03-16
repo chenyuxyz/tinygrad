@@ -111,6 +111,14 @@ def assign_multi(dest:UOp, src:UOp):
   if dest.axis != src.axis: raise RuntimeError(f"axis must match in assign {dest.axis} != {src.axis}")
   return dest.src[0].assign(src.src[0]).multi(src.axis)
 
+def store_after_multi(after:UOp):
+  """Unwrap MULTI from both dest and src of STORE+AFTER."""
+  dest, store = after.src[0], after.src[1]
+  src = store.src[1]
+  if dest.axis != src.axis: raise RuntimeError(f"axis must match in assign {dest.axis} != {src.axis}")
+  inner = dest.src[0]
+  return inner.after(inner.store(src.src[0])).multi(src.axis)
+
 def passthrough_multi(root:UOp, multi:UOp):
   return UOp(root.op, root.dtype, (multi.src[0],)+tuple(x.src[0] if x.op is Ops.MULTI else x for x in root.src[1:]), root.arg).multi(multi.axis)
 
@@ -136,6 +144,8 @@ multi_pm = PatternMatcher([
   (UPat(Ops.PERMUTE, src=(UPat(Ops.MULTI, name="multi"), ), name="root"), permute_multi),
   (UPat(Ops.FLIP, src=(UPat(Ops.MULTI, name="multi"), ), name="root"), flip_multi),
   (UPat(Ops.ASSIGN, src=(UPat(Ops.MULTI, name="dest"), UPat(Ops.MULTI, name="src"))), assign_multi),
+  # STORE+AFTER on MULTI: unwrap both dest and src MULTIs together
+  (UPat(Ops.AFTER, src=(UPat(Ops.MULTI), UPat(Ops.STORE, src=(UPat(Ops.MULTI), UPat(Ops.MULTI)))), name="after"), store_after_multi),
   (UPat(Ops.COPY, src=(UPat(Ops.MULTI, name="multi"), UPat(Ops.DEVICE, name="device"))), copy_multi),
   (UPat(Ops.ALLREDUCE, src=(UPat(Ops.MULTI, name="multi"), UPat(Ops.DEVICE, name="device")), name="red"),
     lambda multi,device,red: multi.src[0].allreduce(red.arg, device).multi(axis=multi.axis)),

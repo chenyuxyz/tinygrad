@@ -45,9 +45,8 @@ def found_assign(ctx:dict[UOp, UOp], assign:UOp, src:UOp):
     else: break
   ctx[x] = assign
 
-# *** fold moved ASSIGNs/AFTERs (hack for openpilot) ***
+# *** fold moved AFTERs (hack for openpilot) ***
 pm_fold_moved_assign = PatternMatcher([
-  (UPat(Ops.ASSIGN, src=(UPat(), UPat((*GroupOp.Movement, Ops.CAST), name="src")), name="assign"), found_assign),
   (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(), UPat((*GroupOp.Movement, Ops.CAST), name="src")))), name="assign"), found_assign),
   # replace ALU sources with assign versions found above
   (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
@@ -57,29 +56,30 @@ pm_fold_moved_assign = PatternMatcher([
 pm_mops = PatternMatcher([
   (UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"),
    lambda r,idx: r.src[0].index(*apply_movement_op(r.op, r.src[0].shape, r.marg, idx.src[1:]), dtype=idx.dtype, arg=idx.arg)
-     if len(idx.src[1:]) == len(r.shape) else None),
+     if r.src[0]._shape is not None and len(idx.src[1:]) == len(r.shape) else None),
   # move movement ops after AFTER (but not when AFTER has a raw STORE with shaped children — from replace_contig_with_store_after)
   (UPat(GroupOp.Movement, name="r").after(name="a", allow_any_len=True),
    lambda r,a: UOp(r.op, r.dtype, (a.replace(src=(r.src[0],)+a.src[1:]),)+r.src[1:], r.arg)
-     if not any(s.op is Ops.STORE and s.src[0]._shape is not None for s in a.src[1:]) else None),
+     if a.src[0]._shape is not None and not any(s.op is Ops.STORE and s.src[0]._shape is not None for s in a.src[1:]) else None),
   (UPat(GroupOp.Movement, name="r").end(name="a", allow_any_len=True), lambda r,a: a.replace(src=(r.src[0],)+a.src[1:])),
 ])
 
 # *****************
 # 0. do some cleanup rewrites, mostly copied from the old stuff
 
-def fix_assign_hazard(assign:UOp, target:UOp, src:UOp):
+def fix_store_after_hazard(after:UOp, store:UOp):
   # PERMUTE and FLIP reorder indices, SHRINK can have overlapping regions when dest is also shrunk
+  target, src = store.src[0], store.src[1]
   unsafe = {Ops.PERMUTE, Ops.FLIP} | ({Ops.SHRINK} if target.op_in_backward_slice_with_self(Ops.SHRINK) else set())
   if any(s.op in unsafe and target.base in s.backward_slice for s in src.toposort(gate=lambda s:s.op not in ALWAYS_CONTIGUOUS or s.op is Ops.AFTER)):
-    return assign.replace(src=(target, src.contiguous()))
+    return after.replace(src=(after.src[0], target.store(src.contiguous())) + after.src[2:])
 
-def normalize_assign_target_chain(assign:UOp, target:UOp, src:UOp):
+def normalize_store_after_target_chain(after:UOp, target:UOp, src:UOp):
   root_target = target
-  while root_target.op in {Ops.ASSIGN, Ops.AFTER}: root_target = root_target.src[0]
+  while root_target.op is Ops.AFTER: root_target = root_target.src[0]
   # when RHS depends on the previous assign result, break with contiguous
   if target in src.toposort(): src = src.contiguous()
-  return assign.replace(src=(root_target, src))
+  return after.replace(src=(root_target, root_target.store(src)) + after.src[2:])
 
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
@@ -163,21 +163,16 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
   # copy only to different device
   (UPat(Ops.COPY, src=(UPat.var("x"), UPat()), name="copy"), lambda x,copy: x.f(Ops.NOOP) if x.device == copy.device else None),
 
-  # ** assign rules **
+  # ** assign rules (STORE+AFTER) **
 
-  # collapse nested ASSIGN to the same buffer (e.g. __iadd__ in __setitem__)
-  (UPat(Ops.ASSIGN, src=(UPat(name="target"), UPat(Ops.ASSIGN, src=(UPat(name="target"), UPat()), name="src"))), lambda target, src: src),
-
-  # move bitcast from assign target to source: a.bitcast(X).assign(src) -> a.assign(src.bitcast(a.dtype))
-  (UPat(Ops.ASSIGN, src=(UPat(Ops.BITCAST, src=(UPat(name="target"),)), UPat(name="src"))),
-   lambda target, src: target.assign(src.bitcast(target.dtype))),
-
-  # if assign target is itself an ASSIGN/AFTER chain, canonicalize to the original buffer target
-  (UPat(Ops.ASSIGN, src=(UPat({Ops.ASSIGN, Ops.AFTER}, name="target"), UPat(name="src")), allow_any_len=True, name="assign"),
-   normalize_assign_target_chain),
-
+  # move bitcast from store+after target to source
+  (UPat(Ops.AFTER, src=(UPat(Ops.BITCAST, src=(UPat(name="target"),)), UPat(Ops.STORE, src=(UPat(Ops.BITCAST), UPat(name="src"))))),
+   lambda target, src: target.after(target.store(src.bitcast(target.dtype)))),
   # make source contiguous if it has hazardous movement ops on the dest buffer
-  (UPat(Ops.ASSIGN, src=(UPat.var("target"), UPat.var("src")), name="assign"), fix_assign_hazard),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, name="store")), allow_any_len=True, name="after"), fix_store_after_hazard),
+  # normalize target chain: walk through AFTERs to root, insert contiguous if needed
+  (UPat(Ops.AFTER, src=(UPat({Ops.AFTER}, name="target"), UPat(Ops.STORE, src=(UPat(), UPat(name="src")))), allow_any_len=True, name="after"),
+   lambda after, target, src: normalize_store_after_target_chain(after, target, src)),
 
   # ** size 0 **
 
@@ -374,17 +369,28 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
   if x.src[0].op is Ops.AFTER:
     buf = x.src[0].src[0].buf_uop.base
     stores = [s for s in x.src[0].src[1:] if s.op is Ops.STORE]
-    return buf.after(*[s.end(*rngs) for s in stores]) if stores else buf
+    if not stores: return buf
+    ended_stores = []
+    for s in stores:
+      store_target = s.src[0]
+      if store_target.op is Ops.INDEX:
+        # INDEX'd STORE target (from view assign): unwrap BUFFERIZE(INDEX) and store through the underlying global INDEX
+        if store_target.src[0].op is Ops.BUFFERIZE and store_target.src[0].src[0].op is Ops.INDEX:
+          store_target = store_target.src[0].src[0]
+        if s.src[1] is not store_target:  # skip self-assign
+          end_rngs = sorted(dedup(tuple(store_target.ranges) + tuple(rngs)), key=lambda x: x.arg)
+          ended_stores.append(store_target.replace(dtype=sdtype).store(s.src[1]).end(*end_rngs))
+      else:
+        ended_stores.append(s.end(*rngs))
+    return buf.after(*ended_stores)
+  # ASSIGN is used internally by allreduce for precompiled function bodies
   if (assign := x.src[0]).op is Ops.ASSIGN:
     assign_target, assign_src = assign.src[0], assign.src[1]
     assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
     while assign_src.op is Ops.NOOP: assign_src = assign_src.src[0]
-
     store_target = assign_target
     if assign_target.src[0].op is Ops.BUFFERIZE and assign_target.src[0].src[0].op is Ops.INDEX:
-      # BUFFERIZE(INDEX(...)); store through the underlying global index instead.
       store_target = assign_target.src[0].src[0]
-
     end_rngs = sorted(dedup(tuple(store_target.ranges) + tuple(rngs)), key=lambda x: x.arg)
     ret = store_target.buf_uop.base
     if assign_src is not assign_target: ret = ret.after(store_target.replace(dtype=sdtype).store(assign_src).end(*end_rngs))
@@ -471,7 +477,7 @@ def handle_after(ctx:LocalAddBufferContext, after:UOp):
   buf = after.buf_uop
   # HACK to put the buffer in the MAP instead of MSTACK/MSELECT
   if buf.op in {Ops.MSTACK, Ops.MSELECT}: buf = buf.src[0]
-  assert buf not in ctx.map
+  if buf in ctx.map: return buf  # dedup (same buffer from AFTER chains in multi-view assign)
   ctx.map[buf] = after
   return buf
 
