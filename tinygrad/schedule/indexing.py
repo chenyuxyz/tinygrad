@@ -18,11 +18,11 @@ def realize_srcs(ctx:dict[UOp, None], rb:UOp) -> None:
     if s.base.op not in ALWAYS_CONTIGUOUS: ctx[s] = None
 
 def realize_store_after_src(ctx:dict[UOp, None], buf:UOp, x:UOp):
-  """Don't realize COPY/BUFFER_VIEW when they are the direct source of STORE+AFTER — the target buffer is the output.
-  Realize the value if there's a WAR hazard (buffer appears in value's backward slice)."""
+  # don't realize COPY/BUFFER_VIEW when they are the direct source of STORE+AFTER — the target buffer is the output
   if x.op in {Ops.COPY, Ops.BUFFER_VIEW} and x in ctx \
      and not buf.op_in_backward_slice_with_self(Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD):
     del ctx[x]
+  # you don't usually have to do this for assign unless there's a WAR hazard like TestAssign.test_assign_double_diamond_reduce
   if buf.base in x.backward_slice_with_self: ctx[x] = None
 
 pm_generate_realize_map = PatternMatcher([
@@ -32,8 +32,7 @@ pm_generate_realize_map = PatternMatcher([
   (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE)), allow_any_len=True, name="tr"), realize),
   # realize srcs of these
   (UPat((Ops.COPY, Ops.MSELECT, Ops.MSTACK), name="rb"), realize_srcs),
-  # sometimes realize/unrealize src of store+after and assign
-  (UPat(Ops.ASSIGN, src=(UPat.var("buf"), UPat.var("x"))), realize_store_after_src),
+  # sometimes realize/unrealize src of store+after
   (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat.var("buf"), UPat.var("x"))))), realize_store_after_src),
 ])
 

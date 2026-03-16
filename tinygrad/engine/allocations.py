@@ -63,12 +63,6 @@ def replace_contig_with_store_after(u:UOp):
   buf = _buffer_like(u)
   return buf.after(buf.store(u.src[0])).rtag(u.tag)
 
-def replace_assign_with_contig(u:UOp):
-  assigned_to = u
-  while assigned_to.op in {Ops.ASSIGN, Ops.BITCAST, Ops.AFTER}: assigned_to = assigned_to.src[0].base
-  if assigned_to.op is not Ops.BUFFER:
-    return u.src[1].contiguous(tag=u.tag)
-
 def replace_store_after_with_contig(u:UOp, val:UOp):
   assigned_to = u
   while assigned_to.op in {Ops.ASSIGN, Ops.BITCAST, Ops.AFTER}: assigned_to = assigned_to.src[0].base
@@ -126,8 +120,7 @@ pm_early_transform_tensor_graph = PatternMatcher([
   # remove extra CONTIGUOUS on ASSIGN/AFTER (only when target is contiguous)
   (UPat(Ops.CONTIGUOUS, src=(UPat({Ops.ASSIGN, Ops.AFTER}, name="a"),), name="c"),
    lambda a,c: a.replace(tag=(a.tag or ())+(c.tag or ())) if a.src[0].has_buffer_identity() else None),
-  # replace ASSIGN/AFTER+STORE with CONTIGUOUS when target is not a buffer
-  (UPat(Ops.ASSIGN, name="u"), replace_assign_with_contig),
+  # replace AFTER+STORE with CONTIGUOUS when target is not a buffer
   (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(), UPat(name="val")))), allow_any_len=True, name="u"),
    lambda u, val: replace_store_after_with_contig(u, val)),
   # replace CONTIGUOUS with STORE+AFTER

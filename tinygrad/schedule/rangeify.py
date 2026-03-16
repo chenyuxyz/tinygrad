@@ -53,6 +53,7 @@ pm_fold_moved_assign = PatternMatcher([
 ])
 
 # movement op on INDEX as a PatternMatcher
+# TODO: clean up .src[0]._shape is not None
 pm_mops = PatternMatcher([
   (UPat(GroupOp.Movement, name="r").f(Ops.INDEX, allow_any_len=True, name="idx"),
    lambda r,idx: r.src[0].index(*apply_movement_op(r.op, r.src[0].shape, r.marg, idx.src[1:]), dtype=idx.dtype, arg=idx.arg)
@@ -67,19 +68,18 @@ pm_mops = PatternMatcher([
 # *****************
 # 0. do some cleanup rewrites, mostly copied from the old stuff
 
-def fix_store_after_hazard(after:UOp, store:UOp):
+def fix_store_after_hazard(after:UOp, target:UOp, src:UOp):
   # PERMUTE and FLIP reorder indices, SHRINK can have overlapping regions when dest is also shrunk
-  target, src = store.src[0], store.src[1]
   unsafe = {Ops.PERMUTE, Ops.FLIP} | ({Ops.SHRINK} if target.op_in_backward_slice_with_self(Ops.SHRINK) else set())
   if any(s.op in unsafe and target.base in s.backward_slice for s in src.toposort(gate=lambda s:s.op not in ALWAYS_CONTIGUOUS or s.op is Ops.AFTER)):
-    return after.replace(src=(after.src[0], target.store(src.contiguous())) + after.src[2:])
+    return after.replace(src=(after.src[0], target.store(src.contiguous())))
 
 def normalize_store_after_target_chain(after:UOp, target:UOp, src:UOp):
   root_target = target
   while root_target.op is Ops.AFTER: root_target = root_target.src[0]
   # when RHS depends on the previous assign result, break with contiguous
   if target in src.toposort(): src = src.contiguous()
-  return after.replace(src=(root_target, root_target.store(src)) + after.src[2:])
+  return after.replace(src=(root_target, root_target.store(src)))
 
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
@@ -169,7 +169,7 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
   (UPat(Ops.AFTER, src=(UPat(Ops.BITCAST, src=(UPat(name="target"),)), UPat(Ops.STORE, src=(UPat(Ops.BITCAST), UPat(name="src"))))),
    lambda target, src: target.after(target.store(src.bitcast(target.dtype)))),
   # make source contiguous if it has hazardous movement ops on the dest buffer
-  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, name="store")), allow_any_len=True, name="after"), fix_store_after_hazard),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(name="target"), UPat(name="src")))), name="after"), fix_store_after_hazard),
   # normalize target chain: walk through AFTERs to root, insert contiguous if needed
   (UPat(Ops.AFTER, src=(UPat({Ops.AFTER}, name="target"), UPat(Ops.STORE, src=(UPat(), UPat(name="src")))), allow_any_len=True, name="after"),
    lambda after, target, src: normalize_store_after_target_chain(after, target, src)),
@@ -388,9 +388,12 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
     assign_target, assign_src = assign.src[0], assign.src[1]
     assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
     while assign_src.op is Ops.NOOP: assign_src = assign_src.src[0]
+
     store_target = assign_target
     if assign_target.src[0].op is Ops.BUFFERIZE and assign_target.src[0].src[0].op is Ops.INDEX:
+      # BUFFERIZE(INDEX(...)); store through the underlying global index instead.
       store_target = assign_target.src[0].src[0]
+
     end_rngs = sorted(dedup(tuple(store_target.ranges) + tuple(rngs)), key=lambda x: x.arg)
     ret = store_target.buf_uop.base
     if assign_src is not assign_target: ret = ret.after(store_target.replace(dtype=sdtype).store(assign_src).end(*end_rngs))
