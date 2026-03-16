@@ -168,10 +168,12 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
   # move bitcast from store+after target to source
   (UPat(Ops.AFTER, src=(UPat(Ops.BITCAST, src=(UPat(name="target"),)), UPat(Ops.STORE, src=(UPat(Ops.BITCAST), UPat(name="src"))))),
    lambda target, src: target.after(target.store(src.bitcast(target.dtype)))),
+
   # make source contiguous if it has hazardous movement ops on the dest buffer
   (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(name="target"), UPat(name="src")))), name="after"), fix_store_after_hazard),
+
   # normalize target chain: walk through AFTERs to root, insert contiguous if needed
-  (UPat(Ops.AFTER, src=(UPat({Ops.AFTER}, name="target"), UPat(Ops.STORE, src=(UPat(), UPat(name="src")))), allow_any_len=True, name="after"),
+  (UPat(Ops.AFTER, src=(UPat(Ops.AFTER, name="target"), UPat(Ops.STORE, src=(UPat(), UPat(name="src")))), name="after"),
    lambda after, target, src: normalize_store_after_target_chain(after, target, src)),
 
   # ** size 0 **
@@ -366,24 +368,18 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
 
   sdtype = x.dtype.ptr(size=size, addrspace=x.arg.addrspace)
   # AFTER: add END to the existing STORE, return buffer with kernel dependency
-  if x.src[0].op is Ops.AFTER:
-    buf = x.src[0].src[0].buf_uop.base
-    stores = [s for s in x.src[0].src[1:] if s.op is Ops.STORE]
-    if not stores: return buf
+  if (after:=x.src[0]).op is Ops.AFTER:
+    buf = after.src[0].buf_uop.base
+    if not (stores := [s for s in after.src[1:] if s.op is Ops.STORE and s.src[0].op is Ops.INDEX]): return buf
+    # INDEX'd STORE target (from view assign): unwrap BUFFERIZE(INDEX) and store through the underlying global INDEX
     ended_stores = []
-    for s in stores:
-      store_target = s.src[0]
-      if store_target.op is Ops.INDEX:
-        # INDEX'd STORE target (from view assign): unwrap BUFFERIZE(INDEX) and store through the underlying global INDEX
-        if store_target.src[0].op is Ops.BUFFERIZE and store_target.src[0].src[0].op is Ops.INDEX:
-          store_target = store_target.src[0].src[0]
-        if s.src[1] is not store_target:  # skip self-assign
-          end_rngs = sorted(dedup(tuple(store_target.ranges) + tuple(rngs)), key=lambda x: x.arg)
-          ended_stores.append(store_target.replace(dtype=sdtype).store(s.src[1]).end(*end_rngs))
-      else:
-        ended_stores.append(s.end(*rngs))
+    store_target = stores[0].src[0]
+    if store_target.src[0].op is Ops.BUFFERIZE and store_target.src[0].src[0].op is Ops.INDEX:
+      store_target = store_target.src[0].src[0]
+    if stores[0].src[1] is not store_target:  # skip self-assign
+      end_rngs = sorted(dedup(tuple(store_target.ranges) + tuple(rngs)), key=lambda x: x.arg)
+      ended_stores.append(store_target.replace(dtype=sdtype).store(stores[0].src[1]).end(*end_rngs))
     return buf.after(*ended_stores)
-  # ASSIGN is used internally by allreduce for precompiled function bodies
   if (assign := x.src[0]).op is Ops.ASSIGN:
     assign_target, assign_src = assign.src[0], assign.src[1]
     assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
@@ -480,7 +476,8 @@ def handle_after(ctx:LocalAddBufferContext, after:UOp):
   buf = after.buf_uop
   # HACK to put the buffer in the MAP instead of MSTACK/MSELECT
   if buf.op in {Ops.MSTACK, Ops.MSELECT}: buf = buf.src[0]
-  if buf in ctx.map: return buf  # dedup (same buffer from AFTER chains in multi-view assign)
+  assert buf not in ctx.map
+  # if buf in ctx.map: return buf  # dedup (same buffer from AFTER chains in multi-view assign)
   ctx.map[buf] = after
   return buf
 

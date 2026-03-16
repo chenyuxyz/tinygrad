@@ -25,7 +25,6 @@ def disk_copy_is_buffer(ctx:AllocCtx, u:UOp):
   if from_creation: return tag_uop(ctx, u)
 
 def apply_after(ctx:AllocCtx, u:UOp):
-  if any(s.op is Ops.STORE for s in u.src[1:]): return None  # assign AFTERs are handled by tag_uop + untag_and_append
   base = u.src[0]
   while base.op is Ops.AFTER: base = base.src[0]
   ctx.buffer_map[u] = base
@@ -34,12 +33,11 @@ def apply_after(ctx:AllocCtx, u:UOp):
 add_tags = PatternMatcher([
   (UPat(Ops.COPY, name="u"), disk_copy_is_buffer),
   # no tag on copies that are assigned via STORE+AFTER — merge COPY tag into AFTER
-  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(), UPat(Ops.COPY, name="c")))), allow_any_len=True, name="a"),
-   lambda a,c: a.replace(src=(a.src[0], a.src[1].replace(src=(a.src[1].src[0], c.rtag(()))))+(a.src[2:]),
-                          tag=a.tag+c.tag) if a.tag and c.tag else None),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(name="dest"), UPat(Ops.COPY, name="c")))), name="a"),
+   lambda a,c,dest: a.replace(src=(a.src[0], a.src[1].replace(src=(dest, c.rtag(())))), tag=a.tag+c.tag) if a.tag and c.tag else None),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE)), name="x"), tag_uop),
   (UPat(Ops.AFTER, name="u"), apply_after),
   (UPat({Ops.CONTIGUOUS, Ops.ASSIGN}, name="x"), tag_uop),
-  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE)), allow_any_len=True, name="x"), tag_uop),
   (UPat(GroupOp.All, name="x"), lambda ctx,x: tag_uop(ctx,x) if x in ctx.bases else None),
 ])
 
@@ -63,11 +61,10 @@ def replace_contig_with_store_after(u:UOp):
   buf = _buffer_like(u)
   return buf.after(buf.store(u.src[0])).rtag(u.tag)
 
-def replace_store_after_with_contig(u:UOp, val:UOp):
+def replace_store_after_with_contig(u:UOp, src:UOp):
   assigned_to = u
   while assigned_to.op in {Ops.ASSIGN, Ops.BITCAST, Ops.AFTER}: assigned_to = assigned_to.src[0].base
-  if assigned_to.op is not Ops.BUFFER:
-    return val.contiguous(tag=u.tag)
+  if assigned_to.op is not Ops.BUFFER: return src.contiguous(tag=u.tag)
 
 def contiguous_mops_to_view(c:UOp):
   """CONTIGUOUS(MOPS(BUFFER)) → CONTIGUOUS(BUFFER_VIEW) when movement ops collapse to a contiguous range."""
@@ -121,8 +118,7 @@ pm_early_transform_tensor_graph = PatternMatcher([
   (UPat(Ops.CONTIGUOUS, src=(UPat({Ops.ASSIGN, Ops.AFTER}, name="a"),), name="c"),
    lambda a,c: a.replace(tag=(a.tag or ())+(c.tag or ())) if a.src[0].has_buffer_identity() else None),
   # replace AFTER+STORE with CONTIGUOUS when target is not a buffer
-  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(), UPat(name="val")))), allow_any_len=True, name="u"),
-   lambda u, val: replace_store_after_with_contig(u, val)),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(), UPat(name="src")))), name="u"), replace_store_after_with_contig),
   # replace CONTIGUOUS with STORE+AFTER
   (UPat(Ops.CONTIGUOUS, name="u"), replace_contig_with_store_after),
   # remove DETACH/CONTIGUOUS_BACKWARD (allows more contiguous removal)
