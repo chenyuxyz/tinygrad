@@ -64,6 +64,18 @@ class TestMultiTensor(unittest.TestCase):
     assert GlobalCounters.kernel_count == 0
     (X + X).realize()
 
+  def test_arange_shard_no_copy(self):
+    # pure computations should have no cross-device copies when sharded
+    sched = Tensor.arange(16).shard(devices_4, axis=0).schedule()
+    assert not any(si.ast.op is Ops.COPY for si in sched)
+    np.testing.assert_equal(Tensor.arange(16).shard(devices_4, axis=0).numpy(), np.arange(16))
+    sched = (Tensor.arange(16)*2+1).shard(devices_4, axis=0).schedule()
+    assert not any(si.ast.op is Ops.COPY for si in sched)
+    np.testing.assert_equal((Tensor.arange(16)*2+1).shard(devices_4, axis=0).numpy(), np.arange(16)*2+1)
+    # realized tensor keep copies since it has buffers
+    sched = Tensor.arange(16).realize().shard(devices_4, axis=0).schedule()
+    assert any(si.ast.op is Ops.COPY for si in sched)
+
   def test_arange_shrink(self):
     x = Tensor.arange(4)
     self.assertEqual(x.shard(devices_2, 0).realize().shrink(((2, 4),)).tolist(), [2, 3])
