@@ -48,8 +48,7 @@ def fold_divmod_general(d: UOp, correct_divmod_folding: bool) -> UOp|None:
 
     # fold_divmod_congruence: fold if a is congruent to an expression whose range is between 0 and c
     if not (x.vmin<0 and correct_divmod_folding):
-      # when f%c == c//2, abs(r) == abs(r-c) is a tie, try both signs since either may fit in one period
-      rem_choices = [(r, r-c) if (r:=f%c)*2 == c else (min(r, r-c, key=abs),) for f in factors]
+      rem_choices = [(r, r-c) if (r:=f%c) else (0,) for f in factors]
       for rems in itertools.product(*rem_choices):
         if (rem:=sum(r*v for r,v in zip(rems,terms))+const%c).vmin//c==rem.vmax//c:
           if d.op is Ops.MOD: return rem - rem.vmin//c*c
