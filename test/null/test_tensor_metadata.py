@@ -3,11 +3,12 @@ from tinygrad import Tensor, dtypes
 from tinygrad.tensor import _METADATA
 from tinygrad.engine.realize import capturing
 from tinygrad.helpers import Context
+from tinygrad.uop.ops import all_metadata
 
-@unittest.skip("tensor metadata is no longer supported")
 class TestTensorMetadata(unittest.TestCase):
   def setUp(self) -> None:
     _METADATA.set(None)
+    all_metadata.clear()
     self._ctx = Context(SCACHE=0)
     self._ctx.__enter__()
   def tearDown(self) -> None:
@@ -83,6 +84,11 @@ class TestTensorMetadata(unittest.TestCase):
     #self.assertEqual(len(bw), 1)
     #self.assertEqual(bw[0].name, "sigmoid")
 
+  def test_backward(self):
+    x = Tensor.rand(3, requires_grad=True).realize()
+    x.relu().sum().backward()
+    self.assertIn(("relu", True), {(m.name, m.backward) for m in x.grad.uop.metadata})
+
   def test_tracemeta_0(self):
     with Context(TRACEMETA=0):
       x = Tensor.rand(3, requires_grad=True)
@@ -107,7 +113,6 @@ class TestTensorMetadata(unittest.TestCase):
     c[:4].assign(shared)
     self.assertTrue(self._has_metadata(c[:4].relu(), "relu"))
 
-  @unittest.expectedFailure
   def test_metadata_lost_realize_pending_assign(self):
     shared = Tensor.rand(4)
     c = Tensor.zeros(8).contiguous().realize()
