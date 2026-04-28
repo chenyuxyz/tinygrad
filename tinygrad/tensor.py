@@ -552,13 +552,6 @@ class Tensor(OpMixin):
     Tensor._seed, Tensor._device_seeds, Tensor._device_rng_counters = seed, {}, {}
 
   @staticmethod
-  def _threefry_random_bits(key:Tensor, counts0:Tensor, counts1:Tensor) -> Tensor:
-    x = (counts1.cast(dtypes.uint64) << 32) | counts0.cast(dtypes.uint64)
-    x = x._apply_uop(UOp.threefry, (key[1]._broadcast_to(x.shape).cast(dtypes.uint64) << 32) | key[0]._broadcast_to(x.shape).cast(dtypes.uint64))
-    counts0, counts1 = (x & 0xffffffff).cast(dtypes.uint32), ((x >> 32) & 0xffffffff).cast(dtypes.uint32)
-    return counts0.cat(counts1)
-
-  @staticmethod
   def rand(*shape, device:str|None=None, dtype:DTypeLike|None=None, contiguous:bool=True, **kwargs) -> Tensor:
     """
     Creates a tensor with the given shape, filled with random values from a uniform distribution over the interval `[0, 1)`.
@@ -596,18 +589,7 @@ class Tensor(OpMixin):
 
     low = Tensor._device_rng_counters[device][0:1] - (num & 0xffffffff)
     high = Tensor._device_rng_counters[device][1:2] - (num >> 32) - (Tensor._device_rng_counters[device][0] < (num & 0xffffffff)).cast(dtypes.uint32)
-
-    # threefry random bits
-    bits_list = []
-    for i in range(0, num, dtypes.uint32.max):
-      chunk_num = min(num - i, dtypes.uint32.max)
-      c_low = low + (i & 0xffffffff)
-      c_high = high + (i >> 32) + (c_low < low).cast(dtypes.uint32)
-      new_key = Tensor._threefry_random_bits(Tensor._device_seeds[device], c_low, c_high)
-      counts0 = Tensor.arange(ceildiv(chunk_num, 2), device=device, dtype=dtypes.uint32, requires_grad=False)
-      counts1 = counts0 + ceildiv(chunk_num, 2)
-      bits_list.append(Tensor._threefry_random_bits(new_key, counts0, counts1)[:chunk_num])
-    bits = Tensor.cat(*bits_list)
+    bits = Tensor.random_bits(Tensor._device_seeds[device], low.cat(high), num)
 
     # bitcast to uint with same number of bits
     _, nmant = dtypes.finfo(dt)

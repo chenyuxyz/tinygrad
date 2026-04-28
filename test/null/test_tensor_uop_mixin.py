@@ -137,6 +137,14 @@ class TestTensorUOpAllclose(unittest.TestCase):
     a, b = _t(4).float(), _t(4).float()
     self.assertIs(_strip_unique(a.allclose(b).uop), _strip_unique(a.uop.allclose(b.uop)))
 
+class TestTensorUOpRand(unittest.TestCase):
+  def test_random_bits(self):
+    k = UOp.empty((2,), dtype=dtypes.uint32)
+    c = UOp.zeros(2, dtype=dtypes.uint32)
+    for num in (1, 4, 7, 1024):
+      self.assertIs(_strip_unique(Tensor.random_bits(Tensor(k), Tensor(c), num).uop),
+                    _strip_unique(UOp.random_bits(k, c, num)))
+
 class TestTensorUOpGather(unittest.TestCase):
   def _check(self, t, dim, idx):
     self.assertIs(_strip_unique(t.gather(dim, idx).uop), _strip_unique(t.uop.gather(dim, idx.uop)))

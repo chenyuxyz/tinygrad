@@ -3,6 +3,7 @@ import functools, itertools
 from typing import TYPE_CHECKING, Callable, Self, Sequence, Literal, get_args
 from tinygrad.mixin.elementwise import ElementwiseMixin
 from tinygrad.mixin.movement import MovementMixin
+from tinygrad.mixin.rand import RandMixin
 from tinygrad.mixin.reduce import ReduceMixin
 from tinygrad.uop import Ops
 from tinygrad.uop.ops import _broadcast_shape, resolve, smax, smin, identity_element
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 ReductionStr = Literal["mean", "sum", "none"]
 
 
-class OpMixin(ElementwiseMixin, ReduceMixin):
+class OpMixin(ElementwiseMixin, ReduceMixin, RandMixin):
   @staticmethod
   def unique_const(fill_value:ConstType, **kwargs): raise NotImplementedError("creation helpers are only supported on Tensor and UOp")
 
