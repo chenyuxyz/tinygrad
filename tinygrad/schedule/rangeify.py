@@ -559,7 +559,8 @@ def split_store(x:UOp) -> UOp|None:
   if stored.op in {Ops.COPY, Ops.BUFFER_VIEW}: ret = stored.replace(src=stored.src + ret.ended_ranges)
   else: ret = ret.sink(arg=KernelInfo(opts_to_apply=lctx.opts))
 
-  kernel = ret.call(*lctx.map.values(), *lctx.vars.keys())
+  metadata = tuple(dedup(m for u in x.toposort(gate=lambda u: u.op is not Ops.AFTER) if u.metadata is not None for m in u.metadata))
+  kernel = ret.call(*lctx.map.values(), *lctx.vars.keys(), metadata=metadata)
   if ret.op is Ops.SINK and not all_same([x.device for x in kernel.src[1:] if x.op is not Ops.BIND]):
     raise RuntimeError(f"all buffers must be on the same device: {tuple(b.buf_uop for b in kernel.src[1:])}")
   return kernel
