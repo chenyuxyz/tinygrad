@@ -64,7 +64,7 @@ class Ops(FastEnum):
   ADD = auto(); MUL = auto(); SHL = auto(); SHR = auto(); IDIV = auto(); MAX = auto(); MOD = auto()
   CMPLT = auto(); CMPNE = auto(); CMPEQ = auto()
   XOR = auto(); OR = auto(); AND = auto()
-  THREEFRY = auto(); SUB = auto(); FDIV = auto(); POW = auto(); FLOORDIV = auto(); FLOORMOD = auto()
+  THREEFRY = auto(); SUB = auto(); FDIV = auto(); POW = auto()
 
   # TernaryOps
   WHERE = auto(); MULACC = auto()
