@@ -20,10 +20,20 @@ class TestWinograd(unittest.TestCase):
     out = Tensor.conv2d(x,w)
     self.assertEqual(len(out.schedule_linear().src), 2)
 
+  def test_cin1_and_depthwise_trigger_wino(self):
+    x1, w1 = Tensor.empty(1,1,9,9).realize(), Tensor.empty(4,1,3,3).realize()
+    self.assertEqual(len(Tensor.conv2d(x1, w1, padding=1).schedule_linear().src), 2)
+    xd, wd = Tensor.empty(1,4,9,9).realize(), Tensor.empty(4,1,3,3).realize()
+    self.assertEqual(len(Tensor.conv2d(xd, wd, padding=1, groups=4).schedule_linear().src), 2)
+
   def test_backward_kernels(self):
+    # NOTE: out.mean() collapses the conv to a constant scalar, so its backward graph has no real
+    # forward-conv structure left to rewrite. Use a real loss so the forward conv survives in the
+    # backward graph and pm_wino fires on it without needing a dedicated gradient hook.
     x,w = Tensor.empty(1,4,9,9,requires_grad=True).realize(), Tensor.empty(4,4,3,3,requires_grad=True).realize()
+    y = Tensor.empty(1,4,9,9).realize()
     out = Tensor.conv2d(x,w, padding=1)
-    out.mean().backward()
+    ((out - y)**2).sum().backward()
     backward_schedule = x.grad.schedule_linear(w.grad)
     self.assertEqual(len(backward_schedule.src), 4)
 
