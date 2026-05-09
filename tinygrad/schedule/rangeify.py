@@ -58,9 +58,9 @@ def found_after(ctx:dict[UOp, UOp], after:UOp, src:UOp):
 
 # *** fold moved AFTERs (hack for openpilot) ***
 pm_fold_moved_after = PatternMatcher([
-  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(), UPat((*GroupOp.Movement,Ops.CAST,Ops.WHERE), name="src")))), name="after"), found_after),
-  # replace ALU sources with AFTER versions found above
-  (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
+  # (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(), UPat((*GroupOp.Movement,Ops.CAST,Ops.WHERE), name="src")))), name="after"), found_after),
+  # # replace ALU sources with AFTER versions found above
+  # (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
 ])
 
 # movement op on INDEX as a PatternMatcher
