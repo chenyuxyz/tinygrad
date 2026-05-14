@@ -88,11 +88,11 @@ class Tensor(OpMixin):
   np.set_printoptions(precision=4)
   ```
   """
-  __slots__ = "uop", "requires_grad", "grad"
+  __slots__ = "uop", "requires_grad", "grad", "_device"
   training: ClassVar[bool] = False
 
   def __init__(self, data:ConstType|bytes|list|tuple|UOp|'numpy.ndarray'|pathlib.Path|None,
-               device:str|tuple|list|None=None, dtype:DTypeLike|None=None, requires_grad:bool|None=None, _force_unique:bool=False):
+               device:str|tuple|list|None=None, dtype:DTypeLike|None=None, requires_grad:bool|None=None):
     if device is None:
       if isinstance(data, pathlib.Path): device = f"DISK:{data.resolve()}"  # keep it on the disk if device is None
       elif isinstance(data, UOp): device = data._device
@@ -110,13 +110,12 @@ class Tensor(OpMixin):
     # create a UOp from the different types of inputs
     if isinstance(data, UOp):
       assert _dtype is None or _dtype==data.dtype or data.dtype==dtypes.weakint, f"dtype mismatch: {_dtype} vs {data.dtype}"
-      # if data is dtype.weakint that means that this is a symbolic int and we need to lower it to something we can make a Tensor out of
-      if data.dtype == dtypes.weakint: data = Tensor.from_uop(data, device=_device).uop
+      # symbolic int (weakint) needs dtype lowering before becoming a Tensor
+      if data.dtype == dtypes.weakint: data = _index_to_concrete_int(data)
     elif data is None:
-      data = UOp.const(_dtype or dtypes.default_float, 0, _device)
+      data = UOp.const(_dtype or dtypes.default_float, 0)
     elif isinstance(data, get_args(ConstType)):
-      if _force_unique or requires_grad: data = UOp.unique_const(data, _dtype, _device)
-      else: data = UOp.const(_dtype or dtypes.from_py(data), data, _device)
+      data = UOp.const(_dtype or dtypes.from_py(data), data)
     elif isinstance(data, bytes): data = _frompy(data, _dtype or dtypes.uint8, _device)
     elif isinstance(data, (list, tuple)):
       if _dtype is None:
@@ -128,7 +127,7 @@ class Tensor(OpMixin):
       import numpy as np
       assert isinstance(data, np.ndarray), f"expected np.ndarray, got {data}"
       if data.shape == ():
-        data = UOp.const(_dtype or _from_np_dtype(data.dtype), data.item(), _device)
+        data = UOp.const(_dtype or _from_np_dtype(data.dtype), data.item())
       else:
         data = _fromnp(data.astype(npdtype) if _dtype is not None and (npdtype:=_to_np_dtype(_dtype)) is not None else data)
     elif isinstance(data, pathlib.Path):
@@ -138,8 +137,15 @@ class Tensor(OpMixin):
     # by this point, it has to be a UOp
     if not isinstance(data, UOp): raise RuntimeError(f"can't create Tensor from {data!r} with type {type(data)}")
 
-    # data might be on a different device
-    self.uop:UOp = data if data.device == _device else data.copy_to_device(_device)
+    # data might be on a different device. deviceless UOps adopt the requested device on the Tensor wrapper.
+    udev = data._device
+    self.uop:UOp = data if udev is None or udev == _device else data.copy_to_device(_device)
+    self._device:str|tuple[str, ...] = _device
+
+    # requires_grad on a scalar/array CONST needs unique buffer identity for gradient accumulation
+    if requires_grad and self.uop._device is None:
+      cloned = self.clone()
+      self.uop = cloned.uop
 
     # add to all_tensors after construction succeeds
     all_tensors[weakref.ref(self)] = None
@@ -155,6 +161,9 @@ class Tensor(OpMixin):
     # directly create the Tensor
     ret = Tensor.__new__(Tensor)
     ret.uop, ret.grad = new_uop, None
+    # Tensor.device is independent of UOp device (UOp can be deviceless, e.g. CONST). Derive from first src with a device.
+    udev = new_uop._device
+    ret._device = udev if udev is not None else next((t._device for t in srcs if t._device is not None), self._device)
     ret.requires_grad = True if any(needs_input_grad) else None if None in needs_input_grad else False
     # add to all_tensors after construction succeeds
     all_tensors[weakref.ref(ret)] = None
@@ -162,13 +171,11 @@ class Tensor(OpMixin):
 
   # alu and const_like are used by the mixins
   def alu(self, op: Ops, *src: Tensor) -> Tensor: return self._apply_uop(lambda *u: u[0].alu(op, *u[1:]), *src)
-  def const_like(self, b:ConstType) -> Tensor: return Tensor(self.uop.const_like(b), requires_grad=False)
-  @staticmethod
-  def unique_const(fill_value:ConstType|UOp, **kwargs) -> Tensor: return Tensor(fill_value, _force_unique=True, **kwargs)
+  def const_like(self, b:ConstType) -> Tensor: return Tensor(self.uop.const_like(b), device=self.device, requires_grad=False)
 
   def requires_grad_(self, requires_grad=True) -> Tensor:
-    # make the UOp unique if it's a CONST to prevent gradient accumulation bugs with cached const UOps
-    if requires_grad and self.uop.op is Ops.CONST: self.replace(Tensor(self.uop.arg, device=self.device, dtype=self.dtype, requires_grad=True))
+    # a CONST has no buffer identity, so gradient accumulation needs a fresh buffer-backed leaf
+    if requires_grad and self.uop._device is None: self.replace(self.clone())
     self.requires_grad = requires_grad
     return self
 
@@ -192,7 +199,7 @@ class Tensor(OpMixin):
     return self.shape[0]
 
   @property
-  def device(self) -> str|tuple[str, ...]: return self.uop.device
+  def device(self) -> str|tuple[str, ...]: return self._device
 
   @property
   def shape(self) -> tuple[sint, ...]: return self.uop.shape
@@ -228,6 +235,10 @@ class Tensor(OpMixin):
 
   def linear_with_vars(self, *lst:Tensor) -> tuple[UOp, dict[str, int]]:
     """Creates the LINEAR UOp needed to realize these Tensor(s), with Variables."""
+    # deviceless compute (e.g. Tensor.arange) needs a buffer to anchor the schedule
+    for t in (self,)+lst:
+      if t.uop._device is None and t.uop.op not in {Ops.CONST, Ops.BIND, Ops.VCONST} and not t.uop.has_buffer_identity():
+        t.replace(t.clone())
     big_sink, becomes_map = transform_to_call(UOp.sink(*[x.uop for x in (self,)+lst]))
     _apply_map_to_tensors(becomes_map, name="buffers")
     return create_linear_with_vars(big_sink)
@@ -294,6 +305,7 @@ class Tensor(OpMixin):
       from tinygrad.engine.jit import JitError
       raise JitError("cannot access tensor data during JIT capture, the value will be baked in")
     x = self.cast(self.dtype.base).contiguous()
+    if x.uop._device is None: x = x.clone()
     if isinstance(self.device, tuple): x = x.to("CPU")
     return cast(Buffer, x.realize().uop.buffer).ensure_allocated()
   def _data(self) -> memoryview: return self._buffer().as_memoryview()
@@ -363,7 +375,7 @@ class Tensor(OpMixin):
     """
     Creates a clone of this tensor allocating a separate buffer for the data.
     """
-    ret = self.empty_like()
+    ret = self.empty_like(requires_grad=self.requires_grad)
     if self.grad is not None: ret.grad = self.grad.clone()
     return ret.assign(self)
 
@@ -372,8 +384,10 @@ class Tensor(OpMixin):
     Moves the tensor to the given device.
     """
     if (device:=canonicalize_device(device)) == self.device: return self
-    ret = Tensor(self.uop.copy_to_device(device), requires_grad=self.requires_grad)
-    if self.grad is not None: ret.grad = self.grad.to(device)
+    # copy_to_device on a deviceless UOp can't run (no source device to copy from); materialize first
+    src = self.clone() if self.uop._device is None else self
+    ret = Tensor(src.uop.copy_to_device(device), requires_grad=src.requires_grad)
+    if src.grad is not None: ret.grad = src.grad.to(device)
     return ret
 
   def to_(self, device:str|tuple[str, ...]|None) -> Tensor:
@@ -465,20 +479,6 @@ class Tensor(OpMixin):
 
     return data[:16].contiguous()
 
-  @staticmethod
-  def from_uop(y:UOp, **kwargs) -> Tensor:
-    # TODO: remove this and stay in weakint
-    if y.dtype == dtypes.weakint: y = _index_to_concrete_int(y)
-    if y.op is Ops.BIND:
-      var, val = y.unbind()
-      _device = canonicalize_device(kwargs.get("device"))
-      const = UOp.const(var.dtype, val, _device, ())
-      return Tensor(y.replace(src=(var.replace(src=const.src), const)), **kwargs, requires_grad=False)
-    if y.op is Ops.CONST: return Tensor(y.arg, **kwargs, requires_grad=False)
-    if y.op is Ops.MUL: return Tensor.from_uop(y.src[0]) * Tensor.from_uop(y.src[1])
-    if y.op is Ops.ADD: return Tensor.from_uop(y.src[0]) + Tensor.from_uop(y.src[1])
-    raise RuntimeError(f"unhandled UOp {y}")
-
   # ***** creation entrypoint *****
 
   @staticmethod
@@ -501,6 +501,9 @@ class Tensor(OpMixin):
     Creates an empty tensor with the same shape as `self`.
     If `dtype` is not specified, the dtype of `self` is used.
     """
+    # UOp.empty_like requires a device; for deviceless UOps (e.g. CONST), use Tensor's tracked device.
+    if self.uop._device is None:
+      return Tensor.empty(self.shape, dtype=dtype or self.dtype, device=device or self.device, **kwargs)
     return Tensor(self.uop.empty_like(dtype, device), **kwargs)
 
   @staticmethod
@@ -611,6 +614,18 @@ class Tensor(OpMixin):
     ```
     """
     return super().eye(n, m, dtype, device).requires_grad_(requires_grad)
+
+  @classmethod
+  def full(cls, shape, fill_value:ConstType, **kwargs) -> Tensor:
+    # see OpMixin.full; on Tensor we clone so each call gets its own buffer (replaces the old unique_const identity).
+    # Invalid fills stay deviceless: Invalid is a symbolic sentinel that doesn't have a numeric storage representation.
+    ret = super().full(shape, fill_value, **kwargs)
+    return ret if fill_value is Invalid else ret.clone()
+
+  @classmethod
+  def invalids(cls, *shape, **kwargs) -> Tensor:
+    # Anonymous placeholder buffer for custom_kernel outputs. Uninitialized — kernels overwrite it.
+    return Tensor.empty(*shape, **kwargs)
 
   def _multi_like(self, fxn, *args, **kwargs) -> Tensor:
     dtype = kwargs.pop("dtype", self.dtype)
@@ -862,7 +877,8 @@ class Tensor(OpMixin):
     """
     assert gradient is not None or self.shape == tuple(), "when no gradient is provided, backward must be called on a scalar tensor"
     if not (self.is_floating_point() and all(t.is_floating_point() for t in targets)): raise RuntimeError("only float Tensors have gradient")
-    if gradient is None: gradient = Tensor(1.0, dtype=self.dtype, device=self.device, requires_grad=False)
+    # the seed gradient needs buffer identity so it can participate in CALL graphs as a real input
+    if gradient is None: gradient = Tensor(1.0, dtype=self.dtype, device=self.device, requires_grad=False).clone()
     target_uops = [x.uop for x in targets]
     grads = compute_gradient(self.uop, gradient.uop, set(target_uops))
     ret:list[Tensor] = []
@@ -1034,8 +1050,11 @@ class Tensor(OpMixin):
              if (t:=tref()) is not None and t is not self and t.uop is not v_uop and t.uop not in v_bw):
         raise RuntimeError("can't setitem on a tensor that already has other uses and requires grad")
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
-      # __iadd__/__isub__ creates AFTER(view, STORE(view, computed)); unwrap to get the computed value
-      if v.uop.op is Ops.AFTER and any(s.op is Ops.STORE for s in v.uop.src[1:]): v = v._apply_uop(lambda x: x.src[1].src[1])
+      # __iadd__/__isub__ creates AFTER(view, STORE(view, computed)) where STORE writes to self's view;
+      # unwrap to get the computed value. Only unwrap when the STORE targets self.uop (otherwise we'd
+      # discard the buffer identity that gradient tracking needs to flow back to v).
+      if v.uop.op is Ops.AFTER and any(s.op is Ops.STORE and s.src[0] in self.uop.backward_slice_with_self for s in v.uop.src[1:]):
+        v = v._apply_uop(lambda x: x.src[1].src[1])
       self.replace(self._getitem(indices, v))
       return
     idx = [indices] if (isinstance(indices, list) and all_int(indices)) or not isinstance(indices, (tuple, list)) else list(indices)
@@ -1281,6 +1300,8 @@ class Tensor(OpMixin):
     """
     Returns a contiguous tensor.
     """
+    # deviceless UOps have nothing to bufferize, so materialize via clone for fresh buffer identity
+    if self.uop._device is None and not args: return self.clone()
     return self._apply_uop(UOp.contiguous, extra_args=args, **kwargs)
 
   # ***** broadcasted elementwise ops *****

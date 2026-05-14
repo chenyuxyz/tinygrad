@@ -71,9 +71,11 @@ def create_bufferize_and_index_based_on_ranges(ctx:IndexingContext, x:UOp):
       else:
         # the Bufferize before a COPY is not removable. there should be a better way to do this
         removable = x.op is not Ops.COPY and s.op not in ALWAYS_CONTIGUOUS
-        # None in the device assigns it a number later
-        opts = BufferizeOpts(device=s.device, removable=removable) if len(ctx.range_map[s][1]) == len(realized_ranges) else \
-               BufferizeOpts(device=s.device, addrspace=AddrSpace.LOCAL, removable=removable)
+        # None in the device assigns it a number later. Deviceless srcs (e.g. symbolic int math from arange CONSTs)
+        # inherit a device from the consumer to anchor the bufferize.
+        s_device = s._device if s._device is not None else x._device
+        opts = BufferizeOpts(device=s_device, removable=removable) if len(ctx.range_map[s][1]) == len(realized_ranges) else \
+               BufferizeOpts(device=s_device, addrspace=AddrSpace.LOCAL, removable=removable)
         new_src = UOp(Ops.STAGE, s.dtype, src=(new_src,)+closed_ranges, arg=opts)
         if x in ctx.range_map: new_src = new_src.index(*[r for i,r in enumerate(ctx.range_map[x][0]) if i in realized_ranges])
     new_srcs.append(new_src)

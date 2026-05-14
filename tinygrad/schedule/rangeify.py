@@ -137,9 +137,10 @@ def resolve_function(c:UOp, allow_param_mismatch=True) -> UOp|None:
   return c.src[0].substitute(dict_map, walk=True)
 
 earliest_rewrites = mop_cleanup+PatternMatcher([
-  # early fixup const copy
+  # early fixup const copy: a CONST source needs no copy. With device, substitute; without, drop COPY.
   (UPat(Ops.COPY, src=(UPat.var("s"), UPat.var("d"))),
-   lambda s,d: s.substitute({UOp(Ops.DEVICE, arg=s.device):d}) if s.base.op is Ops.CONST else None),
+   lambda s,d: (s.substitute({UOp(Ops.DEVICE, arg=s._device):d}) if s._device is not None else s)
+   if s.base.op is Ops.CONST else None),
 
   # resolve FUNCTION calls (inline the body)
   (UPat(Ops.FUNCTION, name="c"), resolve_function),
@@ -174,7 +175,8 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
    lambda c,r,d: c.replace(src=(r.contiguous(), d)) if resolve(r.numel() != r.base.numel(), False) else None),
 
   # copy only to different device
-  (UPat(Ops.COPY, src=(UPat.var("x"), UPat()), name="copy"), lambda x,copy: x.f(Ops.NOOP) if x.device == copy.device else None),
+  (UPat(Ops.COPY, src=(UPat.var("x"), UPat()), name="copy"),
+   lambda x,copy: x.f(Ops.NOOP) if x._device is not None and copy._device is not None and x._device == copy._device else None),
 
   # ** store rules **
 
@@ -403,7 +405,12 @@ def bufferize_to_store(ctx:itertools.count, x:UOp, idx:UOp, allow_locals=True):
 
   # NOTE: the DEFINE_LOCAL needs to be disambiguated here
   if sdtype.addrspace == AddrSpace.GLOBAL:
-    buf = UOp(Ops.BUFFER, x.dtype, (UOp(Ops.LUNIQUE, arg=next(ctx)), UOp(Ops.DEVICE, arg=x.arg.device)), size)
+    # if the bufferize is deviceless (purely-symbolic graph), fall back to a device from the content's toposort
+    buf_device = x.arg.device if x.arg.device is not None else next((n._device for n in x.src[0].toposort() if n._device is not None), None)
+    if buf_device is None:
+      from tinygrad.device import Device
+      buf_device = Device.canonicalize(None)
+    buf = UOp(Ops.BUFFER, x.dtype, (UOp(Ops.LUNIQUE, arg=next(ctx)), UOp(Ops.DEVICE, arg=buf_device)), size)
     do_store = buf.index(idx, dtype=sdtype).store(x.src[0]).end(*rngs)
     return buf.after(do_store)
 

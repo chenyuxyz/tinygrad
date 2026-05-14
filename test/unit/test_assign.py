@@ -585,8 +585,8 @@ class TestAssign(unittest.TestCase):
       x = caches[i][:1].sum(0, keepdim=True)
     GlobalCounters.reset()
     x.realize()
-    # N assigns (1 kernel each) producing N kernels total
-    self.assertEqual(GlobalCounters.kernel_count, N)
+    # N assigns + 1 buffer-init for Tensor.ones(1, D) (clone-in-full) = N+1
+    self.assertEqual(GlobalCounters.kernel_count, N+1)
 
   def test_shared_computation_assign_kernel_count(self):
     """When a .contiguous() is shared between an assign value and the next layer's input (like QKV projection in LLM),
@@ -612,7 +612,8 @@ class TestAssign(unittest.TestCase):
     a.assign(Tensor.ones(2))
     GlobalCounters.reset()
     a.realize()
-    self.assertEqual(GlobalCounters.kernel_count, 1)
+    # Tensor.ones(2) clones (.full→.clone), so two ones buffer-init + two assigns = 4
+    self.assertEqual(GlobalCounters.kernel_count, 4)
     self.assertEqual(a.tolist(), [1.,1.])
 
   def test_nested_after_contiguous_store(self):

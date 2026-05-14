@@ -1,6 +1,6 @@
 from typing import cast
-import math, dataclasses, itertools
-from tinygrad.uop.ops import UOp, PatternMatcher, UPat, Ops, all_metadata, graph_rewrite
+import math, dataclasses
+from tinygrad.uop.ops import UOp, PatternMatcher, UPat, Ops, all_metadata
 from tinygrad.helpers import argsort
 from tinygrad.dtype import sum_acc_dtype
 
@@ -15,7 +15,14 @@ def reduce_gradient(ctx:UOp, ret:UOp, op:Ops):
   if op == Ops.MUL: return (broadcast_to_input(ctx * ret) / ret.src[0],)
 
 def _compact_params(body:UOp, all_args:tuple[UOp, ...]) -> tuple[UOp, tuple[UOp, ...]]:
-  """Remove unused PARAMs from body and return compacted (body, args)."""
+  """Remove unused PARAMs from body and return compacted (body, args).
+
+  Args that are deviceless CONSTs (e.g. the grad seed Tensor(1.0)) cannot be kernel inputs;
+  inline them into the body and drop from the args list.
+  """
+  used_params = {p.arg: p for p in body.toposort() if p.op is Ops.PARAM}
+  inlined = {used_params[i]: all_args[i] for i in used_params if all_args[i].op is Ops.CONST}
+  if inlined: body = body.substitute(inlined, walk=True)
   used = sorted({p.arg: p for p in body.toposort() if p.op is Ops.PARAM}.items())
   return body.substitute({p: p.replace(arg=j) for j,(_, p) in enumerate(used)}, walk=True), tuple(all_args[i] for i,_ in used)
 
@@ -38,9 +45,6 @@ def call_gradient(ctx:UOp, k:UOp, needed:set[int]) -> tuple[UOp|None, ...]:
   grad_bodies = [(i, grads[p]) for i in needed if (p:=params.get(i)) is not None and p in grads]
   bwd_body = UOp.maketuple(*(gb for _, gb in grad_bodies)).substitute(fwd_subs, walk=True)
   bwd_body, compact_args = _compact_params(bwd_body, (*args, *grad_args, *fwd_outs))
-  # TODO: is this okay here?
-  from tinygrad.function import pm_transform_unique_const
-  bwd_body = graph_rewrite(bwd_body, pm_transform_unique_const, ctx=(None, itertools.count(0)))
   bwd_call = bwd_body.call(*compact_args, name=(k.arg.name or "")+"_backward", precompile=k.arg.precompile_backward)
   gb_map = {i: idx for idx, (i, _) in enumerate(grad_bodies)}
   return (None,) + tuple(bwd_call.gettuple(gb_map[i]) if i in gb_map else None for i in range(len(args)))

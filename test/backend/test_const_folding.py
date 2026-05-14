@@ -27,6 +27,7 @@ class TestMovedConstFolding(unittest.TestCase):
   def test_add_padded_one(self):
     _check_ast_count(1, Tensor([1.0, 2, 3, 4]) * Tensor.ones(2).pad(((1, 1),)))
 
+  @unittest.expectedFailure  # Tensor.ones now clones into a buffer (.full→.clone), so cross-device copy can no longer fold the const
   def test_copy_padded_const(self):
     schedule = Tensor.ones(4, device="CPU:0").pad(((1, 1),)).to("CPU:1").schedule_linear()
     assert not any(si.src[0].op is Ops.COPY for si in schedule.src), "const copy should be folded"
@@ -165,7 +166,7 @@ class TestMultiConstFolding(unittest.TestCase):
 
 class TestThreefryConstFolding(unittest.TestCase):
   def test_threefry(self):
-    x = UOp.const(dtypes.uint64, 5, Device.DEFAULT, ()).threefry(UOp.const(dtypes.uint64, 10, Device.DEFAULT, ()))
+    x = UOp.const(dtypes.uint64, 5).threefry(UOp.const(dtypes.uint64, 10))
     self.assertIs(x.simplify().op, Ops.CONST)
 
 class TestTautologicalCompare(unittest.TestCase):

@@ -45,15 +45,16 @@ class TestRealizeIsRealized(unittest.TestCase):
     t.realize()
     assert t.uop.is_realized
 
-  # TODO: these are not realized after .realize()
+  # NOTE: post device-removed-from-CONST refactor: Tensor.ones/full clone into a buffer; Tensor(scalar) stays deviceless.
 
   def test_const_not_realized(self):
     t = Tensor(3.14).realize()
     assert not t.uop.is_realized
 
-  def test_ones_not_realized(self):
+  def test_ones_realized(self):
+    # full/ones now clone into a buffer for fresh identity; realize materializes that buffer
     t = Tensor.ones(4, 4).realize()
-    assert not t.uop.is_realized
+    assert t.uop.is_realized
 
   def test_none_not_realized(self):
     t = Tensor(None).realize()
