@@ -1,5 +1,5 @@
 import functools, itertools, time
-from typing import Generic, TypeVar, Callable, cast, overload
+from typing import Generic, TypeVar, Callable, cast, overload, Iterable
 from tinygrad.helpers import Context, dedup, getenv, DEBUG
 from tinygrad.uop.ops import UOp, Ops, graph_rewrite, PatternMatcher, UPat
 from tinygrad.tensor import Tensor
@@ -37,7 +37,11 @@ class _function(Generic[ReturnType]):
   def __call__(self, *args, **kwargs) -> ReturnType:
     st = time.perf_counter()
 
-    params = get_state_dict((args, kwargs), tensor_type=(Tensor, UOp)).values()
+    params: Iterable[Tensor|UOp] = get_state_dict((args, kwargs), tensor_type=(Tensor, UOp)).values()
+    if self.precompile:
+      for t in params:
+        if t.device is None and not (isinstance(t, UOp) and t.op is Ops.BIND):
+          raise ValueError("precompiled function got a deviceless arg; .clone() it first")
 
     # deduplicate input_uops, keeping the first occurrence index for each unique uop
     call_uops: list[UOp] = dedup([(t.uop if isinstance(t, Tensor) else t) for t in params])

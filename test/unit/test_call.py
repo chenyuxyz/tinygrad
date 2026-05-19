@@ -149,6 +149,21 @@ class TestCallSchedule(unittest.TestCase):
     def s(x): return x*2
     (s(a)*3).realize()
 
+  def test_call_precompiled_arg_must_be_device_backed(self):
+    @function(precompile=True)
+    def f(x): return x*2+1
+    deviceless = Tensor(UOp.const(dtypes.float, 3.0)).reshape(1).expand(8)
+    self.assertIsNone(deviceless.device)
+    # a deviceless arg (Tensor or raw UOp) is rejected; the caller must materialize it
+    self.assertRaises(ValueError, f, deviceless)
+    self.assertRaises(ValueError, f, deviceless.uop)
+    np.testing.assert_allclose(f(deviceless.clone())[:3].numpy(), [7., 7., 7.])
+    # a BIND symbolic-var arg is a valid kernel input
+    @function(precompile=True)
+    def g(x, n): return x + n
+    n = UOp.variable("n", 1, 16)
+    np.testing.assert_allclose(g(Tensor.ones(8).contiguous(), n.bind(5)).numpy(), [6.]*8)
+
   def test_double_call(self):
     a = Tensor.empty(4, 8)
     @function(precompile=True)
