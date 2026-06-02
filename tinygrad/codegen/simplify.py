@@ -132,9 +132,10 @@ def reduce_collapse(red:UOp, u:UOp, pm:PatternMatcher=pm_reduce_collapse) -> UOp
     included = u.toposort(gate=lambda x: r in x.ranges)
     if any(x.op in {Ops.STORE, Ops.REDUCE} for x in included): return None
     replaces: dict[UOp, UOp] = {}
+    range_sizes = {s for rr in red.src[1:] for s in rr.src}
     for u in included:
       for s in u.src:
-        if s in included or s in replaces or s.op in {Ops.CONST, Ops.PARAM, Ops.DEFINE_LOCAL, Ops.DEFINE_VAR}: continue
+        if s in included or s in replaces or s in range_sizes or s.op in {Ops.CONST, Ops.PARAM, Ops.DEFINE_LOCAL, Ops.DEFINE_VAR}: continue
         replaces[s] = UOp.variable(f'in{len(replaces)}', s.vmin, s.vmax, s.dtype)
     collapse_fxn = u.substitute(replaces).reduce(r, arg=Ops.ADD)
     sink = graph_rewrite(collapse_fxn, pm, name="reduce_collapse")

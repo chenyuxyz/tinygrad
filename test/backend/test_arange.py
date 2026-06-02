@@ -4,6 +4,7 @@ from tinygrad import Tensor, GlobalCounters, dtypes, nn, Device, Variable
 from tinygrad.helpers import Context, getenv, DEV
 from tinygrad.engine.realize import run_linear, estimate_uop, compile_linear
 from tinygrad.renderer.ptx import PTXRenderer
+from tinygrad.uop.ops import UOp, Ops
 from test.helpers import needs_second_gpu
 
 class TestArange(unittest.TestCase):
@@ -15,9 +16,43 @@ class TestArange(unittest.TestCase):
     np.testing.assert_equal(tensor.numpy(), desired)
     return estimate_uop(linear.src[-1]).ops
 
+  def _assert_symbolic_equal(self, tensor, desired):
+    linear, var_vals = tensor.linear_with_vars()
+    run_linear(linear, var_vals)
+    np.testing.assert_equal(tensor._buffer().numpy()[:desired.size].reshape(desired.shape), desired)
+    return linear, var_vals
+
   def test_arange_complexity(self):
     self.assertEqual(self._get_flops(Tensor.arange(256), np.arange(256)), 0)
     self.assertEqual(self._get_flops(Tensor.arange(2560), np.arange(2560)), 0)
+
+  def test_symbolic_arange_has_no_reduce(self):
+    cases = [
+      (Tensor.arange(UOp.variable("n", 4, 100).bind(10)), np.arange(10), {"n": 10}),
+      (Tensor.arange(UOp.variable("n", 4, 100).bind(10)+4), np.arange(14), {"n": 10}),
+      (Tensor.arange(2, UOp.variable("n", 4, 100).bind(10)), np.arange(2, 10), {"n": 10}),
+      (Tensor.arange(UOp.variable("n", 4, 10).bind(6), UOp.variable("m", 20, 200).bind(25)), np.arange(6, 25), {"m": 25, "n": 6}),
+      (Tensor.arange(3, UOp.variable("n", 4, 100).bind(10), 2), np.arange(3, 10, 2), {"n": 10}),
+    ]
+    for t, expected, expected_vars in cases:
+      linear, var_vals = self._assert_symbolic_equal(t, expected)
+      self.assertEqual(var_vals, expected_vars)
+      self.assertEqual(sum(u.op is Ops.REDUCE for u in linear.toposort()), 0)
+
+  def test_symbolic_arange_bindings(self):
+    for n, m in [(4, 20), (6, 25), (10, 33)]:
+      self._assert_symbolic_equal(Tensor.arange(UOp.variable("n", 4, 10).bind(n)+4), np.arange(n+4))
+      self._assert_symbolic_equal(Tensor.arange(2, UOp.variable("n", 4, 10).bind(n)), np.arange(2, n))
+      self._assert_symbolic_equal(Tensor.arange(UOp.variable("n", 4, 10).bind(n), UOp.variable("m", 20, 40).bind(m)), np.arange(n, m))
+      self._assert_symbolic_equal(Tensor.arange(3, UOp.variable("n", 4, 10).bind(n), 2), np.arange(3, n, 2))
+
+  def test_symbolic_arange_cumalu(self):
+    n = UOp.variable("n", 4, 10).bind(6)
+    self._assert_symbolic_equal(Tensor.arange(n).cumsum(0), np.arange(6).cumsum())
+    self._assert_symbolic_equal(Tensor.arange(1, n).cumprod(0), np.arange(1, 6).cumprod())
+    values, indices = Tensor.arange(6).cummax(0)
+    np.testing.assert_equal(values.numpy(), np.arange(6))
+    np.testing.assert_equal(indices.numpy(), np.arange(6))
 
   @unittest.skipIf(Device.DEFAULT == "CL", "flaky in CI")
   def test_arange_cumsum(self):
