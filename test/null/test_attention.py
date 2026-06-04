@@ -30,7 +30,8 @@ class TestAttention(unittest.TestCase):
       rope_noprune(Tensor.randn(1, 2, 4, 8, dtype=dtypes.float32), v_pos.bind(1))
       rope_prune(Tensor.randn(1, 2, 4, 8, dtype=dtypes.float32), v_pos.bind(1))
     assert_jit_cache_len(rope_prune, 1)
-    assert_jit_cache_len(rope_noprune, 3)
+    # symbolic arange in precompute_freqs_cis no longer needs its cumsum reduction kernel
+    assert_jit_cache_len(rope_noprune, 2)
 
 if __name__ == '__main__':
   unittest.main()

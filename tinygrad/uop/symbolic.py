@@ -5,7 +5,7 @@ from tinygrad.uop.ops import Ops, PatternMatcher, UPat, UOp, GroupOp, exec_alu
 from tinygrad.dtype import ConstType, dtypes, PtrDType, can_lossless_cast, Invalid
 from tinygrad.helpers import partition, all_same, prod, flatten, get_single_element, unwrap, IMAGE, dedup
 from tinygrad.uop.decompositions import threefry2x32, xpow
-from tinygrad.uop.divandmod import div_and_mod_symbolic
+from tinygrad.uop.divandmod import div_and_mod_symbolic, sym_lt
 
 # ******** phase 1 of symbolic used to live in ops, it's the most generic folding rules ********
 
@@ -104,6 +104,7 @@ symbolic_simple = propagate_invalid + PatternMatcher([
   (UPat.var("x", dtype=dtypes.bool).logical_not().logical_not(), lambda x: x),
   (UPat.var("x", dtype=dtypes.bool).where(UPat.const(dtypes.bool, True), UPat.const(dtypes.bool, False)), lambda x: x),
   (UPat.var("x", dtype=dtypes.bool).where(UPat.const(dtypes.bool, False), UPat.const(dtypes.bool, True)), lambda x: x.logical_not()),
+  (UPat.var("x", dtype=dtypes.bool) != UPat.cvar("c"), lambda x,c: x.logical_not() if c.arg is True else None),
   # CAST(bool -> int) != const — CAST(True)=1, CAST(False)=0, so fold based on const value
   (UPat.var("x", dtype=dtypes.bool).cast(dtypes.ints+(dtypes.weakint,)) != UPat.cvar("c"),
    lambda x,c: x if c.arg == 0 else x.logical_not() if c.arg == 1 else x.const_like(True)),
@@ -260,6 +261,8 @@ symbolic = symbolic_simple+commutative+PatternMatcher([
   (UPat(Ops.RANGE, src=(UPat(Ops.CONST,)), name="x"), lambda x: x.const_like(x.vmin) if x.vmin == x.vmax else None),
   # max folding
   (UPat.maximum(UPat.var("x"), UPat.var("y")), lambda x,y: x if x.vmin >= y.vmax else y if x.vmax <= y.vmin else None),
+  (UPat.maximum((UPat.var("x")//UPat.var("y"))*-1, UPat.cvar("one")),
+   lambda x,y,one: one if one.arg == 1 and x.vmin >= 0 and y.vmax < 0 and sym_lt(x, -y) else None),
   # TODO: why does this rule break beautiful_mnist?
   #((UPat.var("x")+UPat.var("z")).maximum(UPat.var("y")+UPat.var("z")), lambda x,y,z: x.maximum(y) + z),
   # ** two stage ALU folding **

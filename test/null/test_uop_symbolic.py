@@ -4,7 +4,7 @@ import z3
 
 from tinygrad.dtype import dtypes, ConstType, DType, Invalid
 from test.helpers import get_uops
-from tinygrad.uop.ops import UOp, Ops, graph_rewrite, sym_infer
+from tinygrad.uop.ops import UOp, Ops, AxisType, graph_rewrite, sym_infer
 from tinygrad.uop.symbolic import sym, commutative, pm_simplify_valid, pm_move_where_on_load
 from tinygrad.uop.validate import uops_to_z3
 
@@ -82,6 +82,24 @@ class TestSymbolic(unittest.TestCase):
 
   def test_div_reduction(self):
     self.helper_test_variable(Variable("a", 2, 3)//2, 1, 1, "1")
+
+  def test_symbolic_range_divmod_reduction(self):
+    n = Variable("n", 1, 100)
+    n2 = Variable("n2", 2, 100)
+    r = UOp.range(n, 0, AxisType.REDUCE)
+    i = UOp.range(n, 1, AxisType.LOOP)
+    self.assertEqual((((n-1)//(1-2*n))*-1).maximum(1).simplify().render(), "1")
+    self.assertEqual(((n2-1)//(1-2*n2)).simplify().render(), "-1")
+    self.assertEqual(((2*n*r+i)%(2*n*n)).simplify().render(), "(n*r0*2+r1)")
+    self.assertEqual((((2*n*r+i)%(2*n*n))%(2*n-1)).simplify().render(), "(r0+r1)")
+    m = n+4
+    r = UOp.range(m, 2, AxisType.REDUCE)
+    i = UOp.range(m, 3, AxisType.LOOP)
+    self.assertEqual((((2*m*r+i)%(2*m*m))%(2*m-1)).simplify().render(), "(r2+r3)")
+    m = Variable("m", 20, 200)-Variable("n3", 4, 10)
+    r = UOp.range(m, 4, AxisType.REDUCE)
+    i = UOp.range(m, 5, AxisType.LOOP)
+    self.assertEqual((((2*m*r+i)%(2*m*m))%(2*m-1)).simplify().render(), "(r4+r5)")
 
   def test_equality(self):
     idx1 = Variable("idx1", 0, 3)

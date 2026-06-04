@@ -1,7 +1,34 @@
 import functools, itertools, math
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp
 from tinygrad.dtype import dtypes
-from tinygrad.helpers import floordiv, floormod, unwrap
+from tinygrad.helpers import floordiv, floormod, partition, unwrap
+
+def _expand_mul(u:UOp) -> UOp:
+  def key(t:UOp):
+    f = t.const_factor()
+    return (b if f and (b:=t.divides(f)) is not None else t).tuplize
+  if u.op is Ops.ADD: return UOp.usum(*sorted((p for x in u.split_uop(Ops.ADD) for p in _expand_mul(x).split_uop(Ops.ADD)), key=key)).simplify()
+  if u.op is Ops.MUL:
+    a, b = (_expand_mul(x) for x in u.src)
+    if a.op is Ops.ADD: return UOp.usum(*sorted((p for x in a.split_uop(Ops.ADD) for p in _expand_mul(x*b).split_uop(Ops.ADD)), key=key)).simplify()
+    if b.op is Ops.ADD: return UOp.usum(*sorted((p for x in b.split_uop(Ops.ADD) for p in _expand_mul(a*x).split_uop(Ops.ADD)), key=key)).simplify()
+  return u.simplify()
+
+def sym_lt(x:UOp, y:UOp, inclusive=False) -> bool:
+  def bound(u:UOp, upper:bool) -> UOp|None:
+    for r in u.ranges:
+      u0, u1 = u.substitute({r:r.const_like(0)}), u.substitute({r:r.const_like(1)})
+      coeff = _expand_mul(u1-u0)
+      try:
+        if (affine:=_expand_mul(u-(u0+coeff*r))).vmin != 0 or affine.vmax != 0: return None
+        inc, dec = coeff.vmin >= 0, coeff.vmax <= 0
+      except ValueError: return None
+      if not inc and not dec: return None
+      u = u.substitute({r:(r.src[0]-1 if inc == upper else r.const_like(0))})
+    return u
+  x, y = bound(x, True), bound(y, False)
+  if x is None or y is None: return False
+  return _expand_mul(x-y).vmax <= (0 if inclusive else -1)
 
 # NOTE: this cache is only on index UOps
 @functools.cache
@@ -14,6 +41,8 @@ def fold_divmod_general(d: UOp) -> UOp|None:
   if y_min==y_max==0: raise ZeroDivisionError(f"{'Division' if d.op is Ops.FLOORDIV else 'Mod'} by zero trying to rewrite {x.alu(d.op, y)}")
   if y_min*y_max > 0 and (qv:=floordiv(x_min,y_min)) == floordiv(x_min,y_max) == floordiv(x_max,y_min) == floordiv(x_max,y_max):
     return x - qv*y if d.op is Ops.FLOORMOD else d.const_like(qv)
+  if y_min > 0 and x.vmin >= 0 and sym_lt(x, y): return x if d.op is Ops.FLOORMOD else x.const_like(0)
+  if d.op is Ops.FLOORDIV and x.vmin > 0 and y_max < 0 and sym_lt(x, -y): return x.const_like(-1)
 
   # split uops for the rest of the processing
   x_peeled, const = x.pop_const()
@@ -81,6 +110,21 @@ def fold_divmod_general(d: UOp) -> UOp|None:
   # These rules apply to variables OR constants that failed the checks above.
   # Reconstruct all uops including const for these checks.
   all_uops = list(x.split_uop(Ops.ADD))
+
+  if d.op is Ops.FLOORMOD and y_min > 0 and x.vmin >= 0:
+    rems, changed = [], False
+    for u in all_uops:
+      range_parts, factor_parts = partition(u.split_uop(Ops.MUL), lambda p: p.ranges)
+      term, factor = math.prod(range_parts, start=u.const_like(1)), math.prod(factor_parts, start=u.const_like(1))
+      if factor is y: rem_factor = factor.const_like(0)
+      elif factor.vmin >= 0 and sym_lt(factor, y, inclusive=True): rem_factor = factor
+      elif (diff:=_expand_mul(factor-y)).vmin >= 0 and sym_lt(diff, y, inclusive=True): rem_factor = diff
+      else: break
+      rems.append(term*rem_factor)
+      changed = changed or rem_factor is not factor
+    else:
+      rem = sum(rems, x.const_like(0))
+      if changed and rem.vmin >= 0 and sym_lt(rem, y): return rem
 
   # divide_by_gcd: x//y -> (x//gcd)//(y//gcd)
   gcd = UOp.gcd(*all_uops, y).simplify()
