@@ -813,13 +813,16 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     numel = self.numel()
     out = graph_rewrite(self.flatten().index(UOp.range(numel, 0)), pm_mops+symbolic, name="contiguous_view_offset")
     if out.op is not Ops.INDEX: return None
-    if out.src[1].op is Ops.CONST and resolve(numel == 1, False):
-      if not isinstance(out.src[1].arg, int): return None  # masked/padded regions produce InvalidType
-      return out.src[1].arg
-    if out.src[1].op is Ops.RANGE: return 0
-    if out.src[1].op is Ops.ADD and out.src[1].src[0].op is Ops.RANGE and out.src[1].src[1].op is Ops.CONST:
-      if not isinstance(out.src[1].src[1].arg, int): return None  # masked/padded regions produce InvalidType
-      return out.src[1].src[1].arg
+    # a multi-dim index on a contiguous base linearizes with row-major strides
+    idx = out.src[1] if len(out.src) == 2 else \
+      graph_rewrite(functools.reduce(lambda acc,si: acc*si[0]+si[1], zip(out.src[0].shape, out.src[1:]), UOp.const(dtypes.weakint, 0)), symbolic)
+    if idx.op is Ops.CONST and resolve(numel == 1, False):
+      if not isinstance(idx.arg, int): return None  # masked/padded regions produce InvalidType
+      return idx.arg
+    if idx.op is Ops.RANGE: return 0
+    if idx.op is Ops.ADD and idx.src[0].op is Ops.RANGE and idx.src[1].op is Ops.CONST:
+      if not isinstance(idx.src[1].arg, int): return None  # masked/padded regions produce InvalidType
+      return idx.src[1].arg
     return None
 
   def has_buffer_identity(self):

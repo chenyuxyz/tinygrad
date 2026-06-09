@@ -11,6 +11,12 @@ def _unwrap_src(s: UOp) -> UOp:
   while len(s.src) and s.op not in {Ops.AFTER, Ops.BUFFER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.BIND}: s = s.src[0]
   return s
 
+# like _unwrap_src().buf_uop, but a SLICE view over the base buffer is preserved (copies read through views)
+def _arg_uop(s: UOp) -> UOp:
+  while len(s.src) and s.op not in {Ops.AFTER, Ops.BUFFER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.BIND, Ops.SLICE}: s = s.src[0]
+  if s.op is Ops.SLICE: return s.replace(src=(_unwrap_src(s.src[0]).buf_uop, s.src[1]))
+  return s.buf_uop
+
 def _split_after(after: UOp) -> tuple[tuple[UOp, ...], tuple[UOp, ...]]:
   kernels, remaining = partition(after.src[1:], lambda s: s.op in {Ops.CALL, Ops.END})
   deps, remaining = partition(remaining, lambda s: s.op is Ops.AFTER)
@@ -59,7 +65,7 @@ def create_schedule(sched_sink:UOp) -> UOp:
       else:
         k = rk.src[0] if rk.op is Ops.END else rk
         assert k.op is Ops.CALL, f"unexpected op in queue: {k.op}"
-        buf_uops = tuple(_unwrap_src(s).buf_uop for s in k.src[1:] if s.op is not Ops.BIND)
+        buf_uops = tuple(_arg_uop(s) for s in k.src[1:] if s.op is not Ops.BIND)
         linearized.append(k.src[0].call(*buf_uops, metadata=k.arg.metadata))
       for x in children.get(rk, []):
         in_degree[x] -= 1

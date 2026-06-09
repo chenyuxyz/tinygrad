@@ -223,7 +223,7 @@ spec_program = PatternMatcher([
 # these are intermediate ops. everything should be deleted from here
 spec_full = PatternMatcher([
   # SLICE on BUFFER is allowed if BUFFER is
-  (UPat(Ops.SLICE, src=(UPat(GroupOp.Movement.union({Ops.BUFFER, Ops.PARAM, Ops.STAGE, Ops.AFTER})),
+  (UPat(Ops.SLICE, src=(UPat(GroupOp.Movement.union({Ops.BUFFER, Ops.PARAM, Ops.STAGE, Ops.AFTER, Ops.MSELECT})),
                         UPat(Ops.CONST, dtype=dtypes.weakint)), allow_any_len=True, name="bv"),
    lambda bv: isinstance(bv.arg, int)),
 

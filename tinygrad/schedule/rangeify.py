@@ -145,6 +145,17 @@ def resolve_function(c:UOp, allow_param_mismatch=True) -> UOp|None:
     if p.dtype != a.dtype: raise TypeError(f"arg {i} dtype mismatch: expected {p.dtype}, got {a.dtype}")
   return c.src[0].substitute(dict_map, walk=True)
 
+def copy_from_view(c:UOp, r:UOp, d:UOp) -> UOp|None:
+  if not resolve(r.numel() != r.base.numel(), False): return None
+  # if the movement ops collapse to a contiguous range of a buffer, copy from a zero-copy SLICE view instead of materializing the range
+  base = r.base
+  if base.op in {Ops.BUFFER, Ops.PARAM} or (base.op is Ops.MSELECT and base.src[0].op in {Ops.BUFFER, Ops.PARAM}):
+    from tinygrad.device import Device
+    if isinstance(r.device, str) and hasattr(Device[r.device].allocator, "_offset") and (offset:=r.contiguous_view_offset()) is not None:
+      view = UOp(Ops.SLICE, r.dtype, (base, UOp.const(dtypes.weakint, offset)), r.numel())
+      return c.replace(src=(view, d)).reshape(r.shape)
+  return c.replace(src=(r.contiguous(), d))
+
 earliest_rewrites = mop_cleanup+PatternMatcher([
   # resolve FUNCTION calls (inline the body)
   (UPat(Ops.FUNCTION, name="c"), resolve_function),
@@ -174,12 +185,11 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # ** copy rules **
 
-  # COPY and source size need to match
-  (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"), UPat(name="d")), name="c"),
-   lambda c,r,d: c.replace(src=(r.contiguous(), d)) if resolve(r.numel() != r.base.numel(), False) else None),
-
   # copy only to different device
   (UPat(Ops.COPY, src=(UPat.var("x"), UPat()), name="copy"), lambda x,copy: x.f(Ops.NOOP) if x.device == copy.device else None),
+
+  # COPY and source size need to match
+  (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"), UPat(name="d")), name="c"), copy_from_view),
 
   # ** store rules **
 
@@ -563,7 +573,15 @@ def split_store(x:UOp) -> UOp|None:
   if ret.op is Ops.STORE: stored = ret.src[1]
   elif ret.op is Ops.END and ret.src[0].op is Ops.STORE: stored = ret.src[0].src[1]
   else: raise RuntimeError(f"unknown kernel type {ret.op}")
-  if stored.op in {Ops.COPY, Ops.SLICE}: ret = stored.replace(src=stored.src + ret.ended_ranges)
+  if stored.op in {Ops.COPY, Ops.SLICE}:
+    ret = stored.replace(src=stored.src + ret.ended_ranges)
+    # a COPY that reads through a SLICE view passes SLICE(buf) as the call arg instead of the whole base buffer
+    xstored = x.src[1] if x.op is Ops.STORE else x.src[0].src[1]
+    if xstored.op is Ops.COPY and xstored.src[0].op is Ops.INDEX and (sl:=xstored.src[0].src[0]).op is Ops.SLICE:
+      key = sl.src[0].src[0] if sl.src[0].op is Ops.MSELECT else sl.src[0]
+      val = lctx.map[key]
+      if sl.src[0].op is Ops.MSELECT and val.op is not Ops.MSELECT: val = val.mselect(sl.src[0].arg)
+      lctx.map[key] = UOp(Ops.SLICE, sl.dtype, (val, sl.src[1]), sl.arg)
   else: ret = ret.sink(arg=KernelInfo(opts_to_apply=lctx.opts))
 
   kernel = ret.call(*lctx.map.values(), *lctx.vars.keys())

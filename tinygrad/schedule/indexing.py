@@ -175,6 +175,9 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
     # treat MSTACK/MSELECT like SINK
     if x.op in {Ops.MSTACK, Ops.MSELECT}: continue
 
+    # SLICE is a buffer reference, not data flow: its source is never indexed
+    if x.op is Ops.SLICE: continue
+
     if x.dtype.scalar() == dtypes.weakint: continue  # TODO: why do I need this?
     ending_ranges[x] = sum([ending_ranges.get(u, []) for u in consumer_map[x]], [])
 
