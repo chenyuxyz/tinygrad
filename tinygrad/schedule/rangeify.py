@@ -312,6 +312,20 @@ def remove_noop_bufferize(idx,b2):
   if idx.src[1:] != b2.src[1:] or idx.src[0].op is Ops.SLICE: return None
   return idx.src[0].shrink(tuple((0, s) for s in b2.shape)) if b2.shape else idx.src[0]
 
+def read_invalid_init(idx:UOp, after:UOp):
+  # if a buffer's only writes are full-buffer Invalid stores, it's never given real data, so any read of it is Invalid
+  stores = tuple((x.src[0], x.src[1:]) if x.op is Ops.END else (x, tuple(x.src[0].ranges)) for x in after.src[1:])
+  if stores and all(s.op is Ops.STORE and s.src[0].buf_uop is after.src[0].buf_uop and s.src[1].base.arg is Invalid and
+                    prod(tuple(r.src[0].arg if r.src[0].op is Ops.CONST else r.src[0] for r in rngs)) == prod(after.src[0].shape)
+                    for s,rngs in stores):
+    return idx.const_like(Invalid)
+  return None
+
+def remove_noop_after(a:UOp):
+  src = (a.src[0],) + tuple(x for x in a.src[1:] if x.op is not Ops.NOOP)
+  if len(src) == len(a.src): return None
+  return src[0] if len(src) == 1 else a.replace(src=src)
+
 pm_const_buffer_folding = pm_mops+PatternMatcher([
   (UPat(Ops.STAGE, name="b"), cleanup_dead_axes),
   # remove noop buffers. if we look at the next index we can remove even more of these
@@ -445,6 +459,7 @@ pm_flatten_bufferize = PatternMatcher([(UPat(Ops.STAGE, name="x"), flatten_buffe
 
 pm_add_buffers = pm_mops+pm_flatten_bufferize+to_bufferview+PatternMatcher([
   (UPat(Ops.STAGE, src=(UPat(), UPat(name="idx")), name="x"), lambda ctx,x,idx: bufferize_to_store(ctx, x, idx, allow_locals=False)),
+  (UPat(Ops.INDEX, src=(UPat(Ops.AFTER, name="after"),), allow_any_len=True, name="idx"), read_invalid_init),
 
   # move RESHAPEs through MSELECT/MSTACK
   (UPat((Ops.MSELECT, Ops.MSTACK), src=UPat(Ops.RESHAPE), name="m"),
@@ -456,8 +471,8 @@ pm_add_buffers = pm_mops+pm_flatten_bufferize+to_bufferview+PatternMatcher([
   # remove invalid writes
   (UPat(Ops.STORE, src=(UPat(), UPat(Ops.CONTIGUOUS, src=(UPat(Ops.CONST, arg=Invalid),)))), lambda: UOp(Ops.NOOP)),
   (UPat(Ops.STORE, src=(UPat(), UPat(Ops.CONST, arg=Invalid))), lambda: UOp(Ops.NOOP)),
-  (UPat(Ops.AFTER, src=(UPat.var("x"), UPat(Ops.NOOP, src=()))), lambda x: x),
-  (UPat(Ops.AFTER, src=(UPat.var("x"), UPat(Ops.END, src=(UPat(Ops.NOOP, src=()),), allow_any_len=True))), lambda x: x),
+  (UPat(Ops.END, src=(UPat(Ops.NOOP, name="x"),), allow_any_len=True), lambda x: x),
+  (UPat(Ops.AFTER, name="a"), remove_noop_after),
 ])
 
 pm_add_buffers_local = pm_mops+pm_flatten_bufferize+to_bufferview+PatternMatcher([

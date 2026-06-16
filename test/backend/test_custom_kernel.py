@@ -1,6 +1,6 @@
 import unittest
 from tinygrad import Tensor, UOp, GlobalCounters, Context, Device
-from tinygrad.dtype import AddrSpace, dtypes
+from tinygrad.dtype import AddrSpace, dtypes, Invalid
 from tinygrad.uop.ops import KernelInfo, AxisType, Ops
 
 # **** kernels ****
@@ -327,6 +327,12 @@ class TestCustomKernel(unittest.TestCase):
       prg = call.src[0]
       if prg.op is not Ops.PROGRAM: continue
       self.assertTrue(len(prg.arg.globals) > 0, f"empty kernel compiled (no globals): name={prg.arg.name}")
+
+  def test_partial_invalid_store_keeps_uncovered_reads(self):
+    # a read folds to Invalid only when the buffer's writes cover the WHOLE buffer; a partial Invalid store must not corrupt the rest
+    x = Tensor([10., 20., 30., 40.]).contiguous().realize()
+    after = x.uop.after(x.uop.shrink(((0, 2),)).store(UOp.const(dtypes.float, Invalid, shape=(2,))))
+    self.assertEqual((Tensor(after) + 1).tolist(), [11., 21., 31., 41.])
 
   @unittest.skipIf(Device.DEFAULT == "WEBGPU", "kernel timing not supported")
   def test_invalids_into_custom_kernel_with_beam(self):
