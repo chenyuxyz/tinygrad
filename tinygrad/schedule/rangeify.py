@@ -616,16 +616,25 @@ def get_kernel_graph(sink:UOp) -> UOp:
 
   # WAR deps: if kernel U reads buffer S, and S is also written by another kernel, S's write must wait for U to finish
   afters = [u for u in tsink.toposort() if u.op is Ops.AFTER]
-  kernel_assign: dict[UOp, UOp] = {u.buf_uop:u for u in afters}
+  kernel_assigns: dict[UOp, list[UOp]] = {}
+  for u in afters: kernel_assigns.setdefault(u.buf_uop, []).append(u)
   assign_rep: dict[UOp, UOp] = {}
-  for u in afters:
-    for s in u.src[1].src:
+  for orig_u in afters:
+    u = assign_rep.get(orig_u, orig_u)
+    for s in orig_u.src[1].src:
       # TODO: this is probably broken for MSELECT/MSTACK
-      if s.op not in {Ops.BUFFER, Ops.PARAM} or s is u.buf_uop or (a:=kernel_assign.get(s)) is None: continue
-      if a.src[1] is u.src[1]: continue  # same kernel (multi-output custom kernels)
-      if any(x.op is Ops.AFTER and x.buf_uop is s for x in kernel_assign[u.buf_uop].backward_slice):
-        raise RuntimeError(f"cycle detected in assign graph, buffers {s} and {u.buf_uop} have circular dependency")
-      assign_rep[a] = kernel_assign[s] = a.replace(src=a.src+(u,))
+      if s.op not in {Ops.BUFFER, Ops.PARAM, Ops.AFTER}: continue
+      read_buf = s if s.op in {Ops.BUFFER, Ops.PARAM} else s.buf_uop
+      if read_buf is orig_u.buf_uop: continue
+      for orig_a in kernel_assigns.get(read_buf, []):
+        if orig_a.src[1] is orig_u.src[1]: continue  # same kernel (multi-output custom kernels)
+        if orig_a in orig_u.backward_slice or orig_a in s.backward_slice: continue  # this kernel reads the state produced by orig_a
+        if s.op is Ops.AFTER and s not in orig_a.backward_slice: continue  # writer doesn't supersede the state being read
+        a = assign_rep.get(orig_a, orig_a)
+        if orig_a in u.backward_slice or a in u.backward_slice:
+          raise RuntimeError(f"cycle detected in assign graph, buffers {read_buf} and {orig_u.buf_uop} have circular dependency")
+        if u in a.backward_slice: continue  # dep already exists
+        assign_rep[orig_a] = a.replace(src=a.src+(u,))
   if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, name="fix_assign")
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
   return tsink
