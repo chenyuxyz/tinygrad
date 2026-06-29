@@ -221,6 +221,36 @@ class TestAssign(unittest.TestCase):
     a += 1
     np.testing.assert_allclose(a.numpy(), 3)
 
+  def test_lazy_reader_before_chained_assigns(self):
+    x = Tensor([1.]).realize()
+    y = x + 10
+    x.assign(x*2)
+    x.assign(x+3)
+    x.realize()
+    np.testing.assert_allclose(y.numpy(), [11.])
+    np.testing.assert_allclose(x.numpy(), [5.])
+
+  def test_delayed_lazy_reader_before_chained_assigns(self):
+    x = Tensor([1.]).realize()
+    y = Tensor([10.]).realize()
+    y.assign(y+1)
+    r = x + y
+    x.assign(x*2)
+    x.assign(x+3)
+    x.realize()
+    np.testing.assert_allclose(r.numpy(), [12.])
+    np.testing.assert_allclose(x.numpy(), [5.])
+    np.testing.assert_allclose(y.numpy(), [11.])
+
+  def test_lazy_reader_of_intermediate_assign_state(self):
+    x = Tensor([1.]).realize()
+    x.assign(x*2)
+    b = x + 20
+    x.assign(x+3)
+    x.realize()
+    np.testing.assert_allclose(b.numpy(), [22.])
+    np.testing.assert_allclose(x.numpy(), [5.])
+
   def test_crossover_assign(self):
     a = Tensor.full((4,), 2).contiguous().realize()
     b = Tensor.full((4,), 3).contiguous().realize()

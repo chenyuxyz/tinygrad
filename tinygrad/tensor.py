@@ -32,6 +32,28 @@ def _apply_map_to_tensors(applied_map:dict[UOp, UOp], name:str, walk:bool=False)
       if s is ns: continue
       t.uop = ns
 
+def _endangered_readers(big_sink:UOp) -> tuple[UOp, ...]:
+  # a STORE in this sink overwrites a buffer; pull in any live tensor that reads a now-superseded state of that
+  # buffer so the WAR pass orders its read before the overwrite (else a separate later realize reads stale bytes)
+  pulled:list[UOp] = []
+  while True:
+    topo = big_sink.toposort()
+    store_tgts = [u.src[0] for u in topo if u.op is Ops.STORE]
+    states = {tgt if tgt.op in {Ops.AFTER, Ops.CONTIGUOUS} else tgt.buf_uop for tgt in store_tgts}
+    if not states: break
+    # like _apply_map_to_tensors, propagate "reaches a superseded state" up each tensor with topovisit; an AFTER
+    # reads a pinned state, so it shields everything above it from counting as a stale read
+    in_scope: dict[UOp, bool] = {}
+    def visitor(node:UOp) -> bool:
+      if node in states or (node.has_buffer_identity() and node.buf_uop in states): return True
+      return node.op is not Ops.AFTER and any(in_scope.get(s, False) for s in node.src)
+    add = [t.uop for tref in list(all_tensors) if (t:=tref()) is not None and t.uop not in topo and t.uop not in pulled and
+           t.uop.device is not None and not t.uop.has_buffer_identity() and t.uop.topovisit(visitor, in_scope)]
+    if not add: break
+    pulled += add
+    big_sink = UOp.sink(*big_sink.src, *add)
+  return tuple(pulled)
+
 # **** Tensor helper functions ****
 
 def _fromnp(x: 'numpy.ndarray') -> UOp:
@@ -176,7 +198,9 @@ class Tensor(RandMixin):
 
   def linear_with_vars(self, *lst:Tensor) -> tuple[UOp, dict[str, int]]:
     """Creates the LINEAR UOp needed to realize these Tensor(s), with Variables."""
-    big_sink, becomes_map = transform_to_call(UOp.sink(*[x.uop for x in (self,)+lst]))
+    big_sink = UOp.sink(*[x.uop for x in (self,)+lst])
+    big_sink = UOp.sink(*big_sink.src, *_endangered_readers(big_sink))
+    big_sink, becomes_map = transform_to_call(big_sink)
     _apply_map_to_tensors(becomes_map, name="buffers")
     return create_linear_with_vars(big_sink)
 
