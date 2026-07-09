@@ -6,7 +6,7 @@ from tinygrad.helpers import argfix, polyN
 from tinygrad.mixin.creation import CreationMixin
 
 if TYPE_CHECKING:
-  from tinygrad.uop.ops import UOp
+  from tinygrad.uop.ops import UOp, sint
 
 
 class ElementwiseMixin(CreationMixin):
@@ -19,7 +19,7 @@ class ElementwiseMixin(CreationMixin):
     return x if isinstance(x, type(self)) else self._wrap_uop(self._uop.ufix(x))
 
   # implemented in OpMixin, broadcasting needs the movement ops
-  def _broadcasted(self, y: 'Self|ConstType|UOp', reverse: bool = False) -> tuple[Self, Self]:
+  def _broadcasted(self, y: 'Self|ConstType|UOp', reverse: bool = False, match_dtype: bool = True) -> tuple[Self, Self]:
     raise NotImplementedError
 
   def _binop(self, op: Ops, x: Self | ConstType, reverse: bool) -> Self:
@@ -411,10 +411,30 @@ class ElementwiseMixin(CreationMixin):
     m = a.maximum(b)
     return ((a-m).exp() + (b-m).exp()).log() + m
 
-  def where(self, x: Self | ConstType, y: Self | ConstType) -> Self:
-    ref: Self = x if isinstance(x, type(self)) else y if isinstance(y, type(self)) else \
-      self.cast(least_upper_dtype(dtypes.from_py(x), dtypes.from_py(y)))
-    return self.alu(Ops.WHERE, ref.ufix(x), ref.ufix(y))
+  def where(self, x: 'Self|ConstType|sint', y: 'Self|ConstType|sint') -> Self:
+    """
+    Returns a tensor of elements selected from either `x` or `y`, depending on `self`.
+    `output_i = x_i if self_i else y_i`.
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    cond = Tensor([[True, True, False], [True, False, False]])
+    print(cond.where(1, 3).numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    Tensor.manual_seed(42)
+    cond = Tensor.randn(2, 3)
+    print(cond.numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    print((cond > 0).where(cond, -float("inf")).numpy())
+    ```
+    """
+    if isinstance(x, type(self)): x, y = x._broadcasted(y)
+    elif isinstance(y, type(self)): y, x = y._broadcasted(x)
+    else: x, y = self.ufix(x)._broadcasted(y)
+    cond, x = self.cast(dtypes.bool)._broadcasted(x, match_dtype=False)
+    cond, y = cond._broadcasted(y, match_dtype=False)
+    return cond.alu(Ops.WHERE, x, y)
 
   def masked_fill(self, mask:Self, value:Self|PyConst) -> Self:
     """

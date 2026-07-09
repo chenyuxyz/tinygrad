@@ -1355,11 +1355,12 @@ class TestGatedUopGivenValid(unittest.TestCase):
 
     idx0 = (r0 + uconst(-1)) // uconst(3)
     idx1 = r0 % uconst(3)
-    idx:UOp = (r0 < 3).where(UOp(Ops.STACK, dtypes.weakint, (idx0, idx1)), UOp.invalid())
+    # raw WHERE: the carrier keeps a bare Invalid; mixin where would broadcast the ()-shaped cond/Invalid to the STACK's shape
+    idx:UOp = (r0 < 3)._select(UOp(Ops.STACK, dtypes.weakint, (idx0, idx1)), UOp.invalid())
     idx = graph_rewrite(idx, pm_simplify_valid)
     # independent simplification: (r0-1)//3 -> (r0+2)//3 - 1, and r0%3 -> r0 when r0 in [0,2]
     expected_vec = UOp(Ops.STACK, dtypes.weakint, ((r0 + uconst(2)) // uconst(3) + uconst(-1), r0))
-    self.assertEqual(idx, (r0 < 3).where(expected_vec, UOp.invalid()))
+    self.assertEqual(idx, (r0 < 3)._select(expected_vec, UOp.invalid()))
 
 class TestRangeSplitting(unittest.TestCase):
   def test_range_split_on_mod(self):

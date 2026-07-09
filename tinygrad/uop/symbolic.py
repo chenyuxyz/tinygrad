@@ -79,18 +79,18 @@ invalid_pat = UPat(Ops.CONST, arg=Invalid, name="i")
 invalid_gate = UPat.var("cond").where(UPat.var("x"), invalid_pat)
 pm_data_invalid = PatternMatcher([
   (UPat(GroupOp.Unary|{Ops.BITCAST}, src=(invalid_pat,), name="op"), lambda i,op: i.cast(op.dtype)),
-  (UPat(GroupOp.Unary|{Ops.BITCAST}, src=(invalid_gate,), name="op"), lambda cond,x,op,i: cond.where(op.replace(src=(x,)), i.cast(op.dtype))),
+  (UPat(GroupOp.Unary|{Ops.BITCAST}, src=(invalid_gate,), name="op"), lambda cond,x,op,i: cond._select(op.replace(src=(x,)), i.cast(op.dtype))),
   # binary ops move inside the gate, with Invalid cast to the result dtype (bool for comparisons)
-  (UPat(GroupOp.Binary, src=(invalid_gate, UPat.var("y")), name="alu"), lambda cond,x,y,alu,i: cond.where(x.alu(alu.op,y), i.cast(alu.dtype))),
-  (UPat(GroupOp.Binary, src=(UPat.var("y"), invalid_gate), name="alu"), lambda cond,x,y,alu,i: cond.where(y.alu(alu.op,x), i.cast(alu.dtype))),
+  (UPat(GroupOp.Binary, src=(invalid_gate, UPat.var("y")), name="alu"), lambda cond,x,y,alu,i: cond._select(x.alu(alu.op,y), i.cast(alu.dtype))),
+  (UPat(GroupOp.Binary, src=(UPat.var("y"), invalid_gate), name="alu"), lambda cond,x,y,alu,i: cond._select(y.alu(alu.op,x), i.cast(alu.dtype))),
   (UPat(GroupOp.Binary-GroupOp.Comparison, src=[invalid_pat, UPat()]), lambda i: i),
   # normalize where(cond, Invalid, val) -> where(~cond, val, Invalid)
-  (UPat.var("cond").where(invalid_pat, UPat.var("val")), lambda cond, i, val: cond.logical_not().where(val, i) if val.arg != Invalid else i),
+  (UPat.var("cond").where(invalid_pat, UPat.var("val")), lambda cond, i, val: cond.logical_not()._select(val, i) if val.arg != Invalid else i),
   # lift Invalid out: a.where(cond.where(x, Invalid), c) -> (~a|cond).where(a.where(x, c), Invalid)
   # when a is cond, ~a|cond is True and would drop the Invalid gate (losing the valid), so keep cond as the gate
   (UPat.var("a").where(invalid_gate, UPat.var("c")), lambda cond,i,x,a,c:
-   (cond if a is cond else (a.logical_not()|cond)).where(a.where(x,c), i) if c.arg != Invalid else None),
-  (UPat.var("a").where(UPat.var("b"), invalid_gate), lambda cond,i,x,a,b: (a|cond).where(a.where(b, x), i) if b.arg != Invalid else None),
+   (cond if a is cond else (a.logical_not()|cond))._select(a._select(x,c), i) if c.arg != Invalid else None),
+  (UPat.var("a").where(UPat.var("b"), invalid_gate), lambda cond,i,x,a,b: (a|cond)._select(a._select(b, x), i) if b.arg != Invalid else None),
   # fold gated LOAD/STORE
   (UPat(Ops.STORE, src=(UPat(Ops.INDEX, src=(UPat(), invalid_pat), allow_any_len=True).or_casted(), UPat())), lambda i: UOp(Ops.NOOP)),
   (UPat(Ops.LOAD, src=(UPat(Ops.INDEX, src=(UPat(), invalid_pat), allow_any_len=True).or_casted(),), allow_any_len=True, name="x"),
@@ -230,13 +230,13 @@ symbolic = symbolic_simple+commutative+PatternMatcher([
   (UPat.cvar("y") * (UPat.var("x", dtype=dtypes.weakint) + UPat.cvar("c")), lambda x,y,c: (y*x)+(y*c)),  # y*(x+c) -> y*x + y*c
   # ** where folding **
   (UPat.var("cond", dtype=dtypes.bool).logical_not().where(UPat.var("t"), UPat.var("f")),
-   lambda cond, t, f: cond.where(f,t) if f.arg is not Invalid else None),
+   lambda cond, t, f: cond._select(f,t) if f.arg is not Invalid else None),
   # alu of two where with same conds can combine, only do if true branch or false branch is const
   (UPat(GroupOp.Binary, name="alu", src=(UPat.var("c").where(UPat.var("t"), UPat.var("f")), UPat.var("c").where(UPat.var("tt"), UPat.var("ff")))), \
-   lambda alu,c,t,tt,f,ff: c.where(t.alu(alu.op, tt), f.alu(alu.op, ff)) if t.op == tt.op == Ops.CONST or f.op == ff.op == Ops.CONST else None),
+   lambda alu,c,t,tt,f,ff: c._select(t.alu(alu.op, tt), f.alu(alu.op, ff)) if t.op == tt.op == Ops.CONST or f.op == ff.op == Ops.CONST else None),
   # if its a plus we add the associative variation too
   ((UPat.var("y")+UPat.var("c").where(UPat.var("t"), UPat.var("f"))) + UPat.var("c").where(UPat.var("tt"), UPat.var("ff")), \
-   lambda y,c,t,tt,f,ff: y+c.where(t+tt, f+ff) if t.op == tt.op == Ops.CONST or f.op == ff.op == Ops.CONST else None),
+   lambda y,c,t,tt,f,ff: y+c._select(t+tt, f+ff) if t.op == tt.op == Ops.CONST or f.op == ff.op == Ops.CONST else None),
   # ALU/variable min==max -> CONST
   (UPat({Ops.CMPLT, Ops.CMPNE, Ops.FLOORDIV, Ops.FLOORMOD, Ops.PARAM, Ops.BIND, Ops.SPECIAL}, name="x"),
    lambda x: x.const_like(x.vmin) if x.vmin == x.vmax else None),
@@ -372,7 +372,7 @@ def reduce_mul_chain(r:UOp) -> UOp|None:
 
 def drop_and_clauses(cond:UOp, x:UOp, i:UOp) -> UOp|None:
   keep, drop = partition(cond.split_uop(Ops.AND), lambda c: any(r in x.ranges for r in c.ranges))
-  return UOp.const(dtypes.bool, True).uprod(*keep).where(x, i) if drop else None
+  return UOp.const(dtypes.bool, True).uprod(*keep)._select(x, i) if drop else None
 pm_drop_and_clauses = PatternMatcher([(invalid_gate, drop_and_clauses)])
 
 # move conditions from where to load's valid, drop clauses already in load
@@ -387,7 +387,7 @@ def where_on_load(cond:UOp, buf:UOp, idx:UOp, or_cast:UOp) -> UOp|None:
   if len(keep) == len(where_clauses): return None
   idx = buf.index(idx.get_idx().valid(load_valid.uprod(*moved)))
   ret_idx = idx.cast(or_cast.dtype) if or_cast.op is Ops.CAST else idx
-  return UOp.const(dtypes.bool, True).uprod(*keep).where(ret_idx, ret_idx.const_like(0))
+  return UOp.const(dtypes.bool, True).uprod(*keep)._select(ret_idx, ret_idx.const_like(0))
 
 # where after gated load becomes alt value, TODO: this is sort of duplicated with rules in devectorizer
 pm_move_where_on_load = PatternMatcher([
@@ -400,7 +400,7 @@ def gated_given_valid(cond:UOp, x:UOp, i:UOp) -> UOp|None:
   if x.dtype is not dtypes.weakint: return None
   # Skip if x contains DIV/MOD AND IMAGE mode is enabled -> image index e.g. openpilot
   if IMAGE.value > 0 and x.op_in_backward_slice_with_self(Ops.CDIV, Ops.CMOD, Ops.FLOORDIV, Ops.FLOORMOD): return None
-  return cond.where(uop_given_valid(cond, x, try_simplex=False), i)
+  return cond._select(uop_given_valid(cond, x, try_simplex=False), i)
 
 # TODO: this is O(number of WHERE * number of node)
 # def fold_where_closure(cond:UOp, t:UOp, f:UOp) -> UOp|None:

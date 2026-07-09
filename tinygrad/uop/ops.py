@@ -616,8 +616,9 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     return ret.reshape(tuple(s for i,s in enumerate(self.shape) if i not in axis)) if axis != reduce_axis else ret
   @staticmethod
   def invalid(): return UOp.const(dtypes.weakint, Invalid)
-  def valid(self, cond):
-    return cond.where(self, self.const_like(Invalid))
+  # TODO: we currently use WHERE without broadcasting and violates spec
+  def _select(self, x, y): return self.alu(Ops.WHERE, x, y)
+  def valid(self, cond): return cond._select(self, self.const_like(Invalid))
   def get_idx(self) -> UOp:
     assert dtypes.is_int(self.dtype), "Can only call get_idx on index dtype"
     if self.op is Ops.STACK: return UOp.vectorize(*(x.get_idx() for x in self.src))
@@ -1308,7 +1309,7 @@ class UPat(OpMixin):
   def end(self, *src:UPat, **kwargs): return UPat(Ops.END, src=(self,)+src, **kwargs)
 
   def const_like(self, b:ConstLike): return UPat.const(self.match_dtype, cast(ConstType, b))
-  def _broadcasted(self, y, reverse=False) -> tuple[UPat, UPat]:
+  def _broadcasted(self, y, reverse=False, match_dtype=True) -> tuple[UPat, UPat]:
     y = self.ufix(y)
     return (y, self) if reverse else (self, y)
   def ufix(self, x): return self.const_like(x) if not isinstance(x, UPat) else x
@@ -1318,6 +1319,10 @@ class UPat(OpMixin):
   def alu(self, op:Ops, *src:UPat):
     asrc = (self,)+src
     return UPat(op, dtypes.bool if op in {Ops.CMPLT, Ops.CMPNE} else asrc[-1].match_dtype, list(asrc) if op in GroupOp.Commutative else asrc)
+  # a pattern describes the WHERE node structurally, tensor-level broadcast/cast semantics don't apply
+  def where(self, x, y):
+    ref = x if isinstance(x, UPat) else y if isinstance(y, UPat) else self.cast(least_upper_dtype(dtypes.from_py(x), dtypes.from_py(y)))
+    return self.alu(Ops.WHERE, ref.ufix(x), ref.ufix(y))
 
   def match(self:UPat, uop:UOp, store:dict[str, UOp]) -> list[dict[str, UOp]]:
     if self.is_any: return flatten([x.match(uop, store.copy()) for x in self.src[0]])
@@ -1672,7 +1677,7 @@ pm_lower_index_dtype = PatternMatcher([
     x.cast(dt:=least_upper_dtype(select_dtype(u), x.dtype, y.dtype)).alu(u.op, y.cast(dt)).cast(u.dtype)),
   (UPat(Ops.CONST, dtype=dtypes.weakint, name="u"), lambda u: u.replace(dtype=select_dtype(u)).cast(u.dtype) if u.arg!=Invalid else None),
   (UPat(Ops.WHERE, dtypes.weakint, src=(UPat.var("cond"), UPat.var("x").cast(dtypes.weakint), UPat.var("y").cast(dtypes.weakint))), lambda cond,x,y:
-    cond.where(x.cast(dt:=least_upper_dtype(x.dtype, y.dtype)), y.cast(dt)).cast(dtypes.weakint)),
+    cond._select(x.cast(dt:=least_upper_dtype(x.dtype, y.dtype)), y.cast(dt)).cast(dtypes.weakint)),
   (UPat(Ops.RANGE, src=(UPat.var("end").cast(dtypes.weakint)), name="r"), lambda r,end: r.replace(dtype=end.dtype, src=(end,)).cast(dtypes.weakint)),
   (UPat(Ops.STACK, src=UPat().cast(dtypes.weakint), name="v"),
     lambda v: v.replace(dtype=(dt:=select_dtype(v)), src=tuple(s.src[0].cast(dt) for s in v.src)).cast(dtypes.weakint)),
