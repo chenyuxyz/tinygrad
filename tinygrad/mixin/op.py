@@ -357,7 +357,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if mode in {"reflect", "replicate"}: return self._pad_reflect_replicate(pX, mode)
     raise NotImplementedError(f"{mode=} is not supported")
 
-  def _broadcasted(self, y:Self|ConstType|UOp, reverse:bool=False) -> tuple[Self, Self]:
+  def _broadcasted(self, y:Self|ConstType|UOp, reverse:bool=False, match_dtype:bool=True) -> tuple[Self, Self]:
     if not isinstance(y, type(self)): y = self.ufix(y)
     x, y = (self, y) if not reverse else (y, self)
     # ValueError: unsized ptr has shape (-1,) which can't broadcast; RuntimeError: shape mismatch
@@ -365,7 +365,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       out_shape = _broadcast_shape(x.shape, y.shape)
       x, y = x._broadcast_to(out_shape), y._broadcast_to(out_shape)
     except (RuntimeError, ValueError): pass
-    if x.dtype == y.dtype: return x, y
+    if x.dtype == y.dtype or not match_dtype: return x, y
     return x.cast(out_dtype := least_upper_dtype(x.dtype, y.dtype)), y.cast(out_dtype)
 
   def dot(self, w:Self, dtype:DTypeLike|None=None) -> Self:
