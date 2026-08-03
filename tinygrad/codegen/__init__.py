@@ -341,7 +341,10 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   # extra symbolic before decomp. crashes without this?
   sink = graph_rewrite(sink, sym, name="extra symbolic")
 
-  # lower index dtype
+  # ***** THE BOUNDARY: weakness ends here *****
+  # above this line a value may be widthless; below it every width is explicit and a rule that mints a const states its width.
+  # pm_commit_weak runs before lower_weak_srcs inside pm_lower_index_dtype and that order is load-bearing (the reverse costs 60 null tests).
+  # pm_lower_weak must never be merged into a matcher that also folds CAST-of-CONST: the marker it mints is folded straight back, a 2-cycle.
   # NOTE: we need indexing_simplify to remove the cast to long using the Invalid
   sink = graph_rewrite(sink, pm_lower_index_dtype+indexing_simplify, ctx={}, name="lower all index dtypes")
 
@@ -357,7 +360,10 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   pm_decomp = symbolic_simple+get_simplifying_rewrite_patterns(supported_ops)
   sink = graph_rewrite(sink, pm_decomp, name="early decompositions")
 
-  # late decomps + move gates from unrenderable INVALID where
+  # below the boundary weakness re-enters only from minting rounds, and each is closed by the commit round that follows it:
+  #   "early decompositions" mints  -> "decomp dtypes" commits (pm_commit_weak)
+  #   "late decompositions"  mints  -> "final rewrite" commits (pm_commit_weak, which is why it heads that sum)
+  # a new minting round below here needs a commit round after it, or its weak nodes reach spec_program and are rejected
   sink = graph_rewrite(sink, pm_dtype_decomps+pm_commit_weak, ctx=(set(), ren), name="decomp dtypes")
   pm_decomp = pm_decomp+\
     get_late_rewrite_patterns(supported_ops, bool(DISABLE_FAST_IDIV))+\
@@ -367,6 +373,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
 
   # final rules for the renderer (without sym)
   extra_matcher = ren.extra_matcher if ren.extra_matcher is not None else PatternMatcher([])
+  # pm_commit_weak heads this sum: renderer matchers in extra_matcher may mint weak, and this is the last round that can commit them
   pm_final_rewrite = pm_commit_weak+pm_cast_weak+pm_decomp+extra_matcher+pm_split_ends
   sink = graph_rewrite(sink, pm_final_rewrite+pm_remove_invalid, ctx=ren, name="final rewrite")
 
