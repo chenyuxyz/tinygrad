@@ -2,10 +2,14 @@ import tempfile, unittest, math
 
 from tinygrad import Tensor, dtypes, TinyJit
 from tinygrad.helpers import Context
-from tinygrad.dtype import least_upper_float
-from tinygrad.uop.ops import UOp, Ops, dtype_from_uop, graph_rewrite, pm_lower_index_dtype, pm_commit_weak
+from tinygrad.dtype import least_upper_float, AddrSpace, Invalid
+from tinygrad.helpers import Target
+from tinygrad.uop.ops import UOp, Ops, dtype_from_uop, graph_rewrite, pm_lower_index_dtype, pm_boundary_demand, pm_commit_weak
 from tinygrad.uop.symbolic import symbolic_simple
-from tinygrad.uop.spec import spec_shared, type_verify
+from tinygrad.uop.spec import spec_shared, spec_tensor, spec_program, type_verify
+from tinygrad.codegen import to_program
+from tinygrad.renderer.cstyle import CStyleLanguage
+from tinygrad.renderer.wgsl import WGSLRenderer
 from tinygrad.engine.jit import JitError
 
 
@@ -83,8 +87,7 @@ class TestWeakPromotion(unittest.TestCase):
       dst = UOp.param(0, dtypes.bfloat16, (1,)).index(UOp.const(0).cast(dtypes.int32))
       gate = UOp.const(True)
       out = graph_rewrite(dst.store(UOp.const(5.0), gate), pm_lower_index_dtype, ctx={})
-    # a bare weak CONST commits directly: the pass runs without symbolic, so a CAST here would survive it
-    self.assertEqual((out.src[1], out.src[2]), (UOp.const(5.0, dtypes.bfloat16), gate))
+    self.assertEqual((out.src[1], out.src[2]), (UOp.const(5.0).cast(dtypes.bfloat16), gate))
 
   def test_weak_srcs_commit_only_at_a_concrete_lub(self):
     weak_lub = UOp(Ops.ADD, src=(UOp.const(1), UOp.const(1.0)))
@@ -96,7 +99,36 @@ class TestWeakPromotion(unittest.TestCase):
   def test_weak_shift_lhs_commits_the_node(self):
     # a shift derives its lhs's dtype, so committing the lhs restates the root (WGSL's packed store writes `mask << shift_am`)
     shl = graph_rewrite(UOp.const(0xFFFF) << UOp.variable("x", 0, 16, dtypes.uint), symbolic_simple+pm_commit_weak)
-    self.assertEqual((shl.dtype, shl.src[0]), (dtypes.uint, UOp.const(0xFFFF, dtypes.uint)))
+    self.assertEqual((shl.dtype, shl.src[0]), (dtypes.uint, UOp.const(0xFFFF).cast(dtypes.uint)))
+
+  def test_program_allows_only_pair_value_weakness(self):
+    type_verify(UOp.const(1), spec_program)
+    type_verify(UOp.const(1).cast(dtypes.int).sink(), spec_program)
+    type_verify(UOp.param(0, dtypes.float, (3,)), spec_program)  # PARAM shape is widthless metadata
+    type_verify(graph_rewrite(UOp.special(3, "gidx0"), pm_boundary_demand), spec_program)  # SPECIAL size is widthless metadata
+    with self.assertRaises(RuntimeError): type_verify(UOp.const(1).sink(), spec_program)
+    with self.assertRaises(RuntimeError): type_verify((UOp.const(1)+UOp.const(2)).sink(), spec_program)
+
+  def test_special_source_dtype_agrees(self):
+    # under SPEC=2 the construction itself is rejected, so build inside the context that expects the raise
+    with self.assertRaises(RuntimeError):
+      type_verify(UOp(Ops.SPECIAL, dtypes.int64, src=(UOp.const(8, dtypes.int8),), arg="gidx0"), spec_tensor)
+    type_verify(UOp(Ops.SPECIAL, dtypes.int64, src=(UOp.const(Invalid),), arg="gidx0"), spec_tensor)
+
+  def test_cstyle_reads_int_pair_and_lane(self):
+    ren, pair = CStyleLanguage(Target()), UOp.const(2).cast(dtypes.int)
+    self.assertEqual(ren.string_rewrite.rewrite(pair, ctx=ren), "2")
+    buf = UOp.param(0, dtypes.float, (4,), addrspace=AddrSpace.ALU)
+    ren.r = {buf: "vec", pair: "2"}
+    self.assertEqual(ren.render_index(buf.index(pair), buf, pair), "vec.z")
+
+  def test_pre_boundary_decomps_keep_shifts(self):
+    # SPEC=1: wgsl's packed_load builds a uint LOAD over a ushort INDEX, which SPEC=2 rejects (master does this too)
+    with Context(EMULATED_DTYPES="bfloat16", SPEC=1):
+      out = (Tensor.empty(8, dtype=dtypes.bfloat16, device="NULL")+Tensor.empty(8, dtype=dtypes.bfloat16, device="NULL")).contiguous()
+      src = to_program(out.schedule_linear().src[-1].src[0], WGSLRenderer(Target("WEBGPU"))).src[2].arg
+    for shift in ("<<16u", ">>16u", ">>7u"): self.assertIn(shift, src)
+    for arithmetic in ("*65536u", "/65536u", "/128u"): self.assertNotIn(arithmetic, src)
 
   @unittest.expectedFailure  # TODO: a weak const defers to its consumer (JAX): these dtypes change once python scalars are weak consts
   def test_changed_rows(self):

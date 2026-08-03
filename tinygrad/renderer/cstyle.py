@@ -23,13 +23,23 @@ base_rewrite = PatternMatcher([
   # casting
   (UPat(Ops.CAST, name="x"), lambda ctx,x: f"__builtin_convertvector({ctx[x.src[0]]}, {ctx.render_type(x)})" \
     if x.max_numel() > 1 and x.addrspace is AddrSpace.REG else None),
-  (UPat(Ops.CAST, name="x"), lambda ctx,x: f"({ctx.render_cast(x, ctx[x.src[0]])})"),
-  (UPat(Ops.BITCAST, name="x"), lambda ctx,x: ctx[x.src[0]] if x.addrspace in (AddrSpace.GLOBAL, AddrSpace.LOCAL) else None),
-  (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"__builtin_bit_cast({ctx.render_type(x)}, ({ctx.render_type(x.src[0])})({ctx[x.src[0]]}))"),
-
-  # GPU stuff
-  (UPat(Ops.BARRIER), lambda ctx: ctx.barrier),
-  (UPat(Ops.SPECIAL, name="x"), lambda ctx,x: f"{ctx.code_for_workitem[x.arg[0]](x.arg[-1])}; /* {(x.src[0]).render()} */"),
+  # the pair CAST(dt, CONST(v)) is the typed constant it commits to: width from the CAST, value from the bare CONST.
+  # it sits above the generic CAST rule so a committed constant renders as a literal, not as a cast of one
+  (UPat(Ops.CAST, dtypes.floats, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+   lambda ctx,x,c: f"({ctx.render_cast(x, ctx.infinity if c.val > 0 else f'-{ctx.infinity}')})" if math.isinf(c.val) else
+                   f"({ctx.render_cast(x, ctx.nan)})" if math.isnan(c.val) else None),
+  (UPat(Ops.CAST, dtypes.float, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),)), lambda ctx,c: f"{c.val}f"),
+  (UPat(Ops.CAST, dtypes.int64, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),)), lambda ctx,c: f"{c.val}l"),
+  (UPat(Ops.CAST, (dtypes.uint64, dtypes.uint32), src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+   lambda ctx,x,c: f"{truncate[x.dtype](c.val)}{'ul' if x.dtype is dtypes.uint64 else 'u'}"),
+  (UPat(Ops.CAST, dtypes.bool, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),)), lambda ctx,c: "1" if c.val else "0"),
+  (UPat(Ops.CAST, (*dtypes.fp8s, dtypes.bfloat16, dtypes.half), src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+   lambda ctx,x,c: f"({ctx.render_cast(x, f'{c.val}f')})"),
+  (UPat(Ops.CAST, (dtypes.uint8, dtypes.uint16), src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+   lambda ctx,x,c: f"({ctx.render_cast(x, f'{c.val}u')})"),
+  (UPat(Ops.CAST, (dtypes.int8, dtypes.int16), src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+   lambda ctx,x,c: f"({ctx.render_cast(x, str(c.val))})"),
+  (UPat(Ops.CAST, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),)), lambda ctx,c: str(c.val)),
 
   # const
   (UPat(Ops.CONST, arg=math.inf, name="x"), lambda ctx, x: f"({ctx.render_cast(x, ctx.infinity)})"),
@@ -47,9 +57,17 @@ base_rewrite = PatternMatcher([
   # default const render
   (UPat(Ops.CONST, name="x"), lambda ctx,x: str(x.val)),
 
+  (UPat(Ops.CAST, name="x"), lambda ctx,x: f"({ctx.render_cast(x, ctx[x.src[0]])})"),
+  (UPat(Ops.BITCAST, name="x"), lambda ctx,x: ctx[x.src[0]] if x.addrspace in (AddrSpace.GLOBAL, AddrSpace.LOCAL) else None),
+  (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"__builtin_bit_cast({ctx.render_type(x)}, ({ctx.render_type(x.src[0])})({ctx[x.src[0]]}))"),
+
+  # GPU stuff
+  (UPat(Ops.BARRIER), lambda ctx: ctx.barrier),
+  (UPat(Ops.SPECIAL, name="x"), lambda ctx,x: f"{ctx.code_for_workitem[x.arg[0]](x.arg[-1])}; /* {x.src[0].ssimplify()} */"),
+
   # SHRINK/INDEX
   (UPat(Ops.INDEX, src=(UPat.var("buf"), UPat.var('idx')), name="x"), lambda ctx,**kwargs: ctx.render_index(**kwargs)),
-  (UPat(Ops.SHRINK, src=(UPat.var("buf"), UPat.var('idx'), UPat.cvar()), name="x"), lambda ctx,**kwargs: ctx.render_index(**kwargs)),
+  (UPat(Ops.SHRINK, src=(UPat.var("buf"), UPat.var('idx'), UPat(Ops.CONST).or_casted()), name="x"), lambda ctx,**kwargs: ctx.render_index(**kwargs)),
   (UPat(Ops.STACK, name="x"),
    lambda ctx,x: f"{ctx.float4.replace('float4', ctx.render_type(x))}" + \
                  f"{ctx.float4_style[0]}{','.join([ctx[y] for y in x.src])}{ctx.float4_style[1]}"),
@@ -116,6 +134,7 @@ def wmma_args(uops:list[UOp]):
               for uop in uops if uop.op is Ops.WMMA)
 
 class CStyleLanguage(Renderer):
+  inline_pairs = True
   abi: str = ""
   kernel_typedef: str = "void"
   buffer_prefix: str = ""
@@ -163,8 +182,9 @@ class CStyleLanguage(Renderer):
   def render_index(self, x:UOp, buf:UOp, idx:UOp):
     if buf.addrspace == AddrSpace.ALU:
       # this is lane access in C
-      if idx.op is not Ops.CONST: return f"({self[buf]})[{self[idx]}]"
-      return self[buf]+(f"[{idx.val}]" if buf.max_numel() > self.gep_arr_threshold else f".{'xyzwabcd'[idx.val]}")
+      const_idx = idx.src[0] if idx.op is Ops.CAST and idx.src[0].op is Ops.CONST and idx.src[0].dtype in dtypes.weaks else idx
+      if const_idx.op is not Ops.CONST: return f"({self[buf]})[{self[idx]}]"
+      return self[buf]+(f"[{const_idx.val}]" if buf.max_numel() > self.gep_arr_threshold else f".{'xyzwabcd'[const_idx.val]}")
     return f"({self[buf]}+{strip_parens(self[idx]) if idx.arg == Ops.ADD else self[idx]})"
 
   def render_buffer(self, x:UOp):
@@ -210,7 +230,8 @@ class CStyleLanguage(Renderer):
     c: defaultdict[str, int] = defaultdict(int)
     name = "test"
     for u in uops:
-      if u.op in {Ops.NOOP, Ops.GROUP}: continue
+      if u.op is Ops.CONST and u.dtype in dtypes.weaks: r[u] = str(u.val)
+      if u.op in {Ops.NOOP, Ops.GROUP} or u.op is Ops.CONST and u.dtype in dtypes.weaks: continue
       if u.op == Ops.STACK and len(u.src) == 0: continue
       if u.op is Ops.AFTER:
         r[u] = r[u.src[0]]
@@ -236,10 +257,13 @@ class CStyleLanguage(Renderer):
       assert l is not None, f"failed to render {u.op} {u.dtype} {[(x.op,x.dtype) for x in u.src]} {u.arg}"
 
       if u.op in {Ops.ENDIF, Ops.END}: depth -= 1
-      if (u.op is not Ops.CAST or u.max_numel() == 1) and (u.op in {Ops.CONST, Ops.INDEX, Ops.SHRINK, Ops.CUSTOMI} or \
+      pair = u.op is Ops.CAST and u.src[0].op is Ops.CONST and u.src[0].dtype in dtypes.weaks
+      can_inline = u.op in {Ops.CONST, Ops.INDEX, Ops.SHRINK, Ops.CUSTOMI} or \
         (u.op is Ops.LOAD and u.src[0].addrspace == AddrSpace.REG and child_count[u] == 1) or \
         (u.op is Ops.CAST and u.addrspace in (AddrSpace.GLOBAL, AddrSpace.LOCAL)) or \
-        (u.op in {Ops.STACK, *(GroupOp.ALU-{Ops.WHERE}), Ops.CAST, Ops.BITCAST} and child_count[u] == 1 and not getenv("EXPAND_SSA"))):
+        (u.op in {Ops.STACK, *(GroupOp.ALU-{Ops.WHERE}), Ops.CAST, Ops.BITCAST} and child_count[u] == 1 and not getenv("EXPAND_SSA")) or \
+        (self.inline_pairs and pair)
+      if (u.op is not Ops.CAST or u.max_numel() == 1) and can_inline:
         r[u] = l
       else:
         if u.op not in {Ops.RANGE, Ops.STORE, Ops.BUFFER} and u.dtype != dtypes.void:
@@ -321,6 +345,8 @@ class OpenCLRenderer(CStyleLanguage):
     # bfloat16 constants need to be rendered as their bit pattern since bf16 is stored as ushort
     (UPat(Ops.CONST, dtypes.bfloat16, name="x"),
       lambda ctx,x: f"{(struct.unpack('I', struct.pack('f', float_to_bf16(x.val)))[0] >> 16)}u"),
+    (UPat(Ops.CAST, dtypes.bfloat16, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),)),
+      lambda ctx,c: f"{(struct.unpack('I', struct.pack('f', float_to_bf16(c.val)))[0] >> 16)}u"),
     # load/store image (OpenCL)
     (UPat.var('buf').index(UPat.var('idx_y'), UPat.var('idx_x')), lambda ctx,buf,idx_y,idx_x: f"IMAGE<{ctx[buf]}, {ctx[idx_y]}, {ctx[idx_x]}>"),
     (UPat(Ops.LOAD, dtype=dtypes.float, src=(UPat.var('buf').index(UPat.var('idx_y'), UPat.var('idx_x')), UPat.var("var"), UPat.var("gate"))),
@@ -498,6 +524,10 @@ class HIPRenderer(CStyleLanguage):
         (UPat(Ops.CONST, dtypes.fp8s, arg=math.inf, name="x"), lambda ctx,x: f"f32_to_fp8({ctx.infinity}, {fp8_index(x.dtype)})"),
         (UPat(Ops.CONST, dtypes.fp8s, arg=-math.inf, name="x"), lambda ctx,x: f"f32_to_fp8(-{ctx.infinity}, {fp8_index(x.dtype)})"),
         (UPat(Ops.CONST, dtypes.fp8s, name="x"), lambda ctx,x: f"f32_to_fp8({x.val}f, {fp8_index(x.dtype)})"),
+        (UPat(Ops.CAST, dtypes.fp8s, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+         lambda ctx,x,c: f"f32_to_fp8({ctx.nan}, {fp8_index(x.dtype)})" if math.isnan(c.val) else
+                         f"f32_to_fp8({'-' if c.val < 0 else ''}{ctx.infinity}, {fp8_index(x.dtype)})" if math.isinf(c.val) else
+                         f"f32_to_fp8({c.val}f, {fp8_index(x.dtype)})"),
         (UPat(Ops.CAST, dtypes.fp8s, (UPat(dtype=dtypes.float),), name="x",),
           lambda ctx,x: f"f32_to_fp8({ctx[x.src[0]]}, {fp8_index(x.dtype)})"),
         (UPat(Ops.CAST, dtypes.float, (UPat.var("y", dtypes.fp8s),), name="x",),

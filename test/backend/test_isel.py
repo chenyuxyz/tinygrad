@@ -1,10 +1,9 @@
 import unittest
 from typing import cast
 from tinygrad import Device
-from tinygrad.uop import Ops
 from tinygrad.uop.ops import UOp, dtypes, graph_rewrite
-from tinygrad.renderer.isa.x86 import X86Renderer, X86Ops
-from tinygrad.renderer.isa import IselContext
+from tinygrad.renderer.isa.x86 import X86Renderer, X86Ops, to_imm
+from tinygrad.renderer.isa import IselContext, machine_const
 
 # INDEX on a register value with a constant index extracts a single element (the old GEP)
 def lane(y:UOp, i:int) -> UOp: return y.index(UOp.const(i, dtypes.int), dtype=y.dtype.scalar())
@@ -48,8 +47,18 @@ class TestIselX86(unittest.TestCase):
     a = UOp.variable("a", 0, 0, dtypes.int32)
     load = UOp.param(0, dtypes.int32, (16,)).index(a + 1).load()
     n = self.isel_rewrite(load)
-    # displacement is the constant in "a" scaled to the buffer element size, dtype is int8 when the value fits otherwise int32
-    self.assertTrue(n.src[2].op is Ops.CONST and n.src[2].dtype is dtypes.int8 and n.src[2].val == 4)
+    # displacement is the constant in "a" scaled to the buffer element size; encoding chooses its width
+    self.assertIs(n.src[2], machine_const(4))
+
+  # a constant reaches isel as a strong CONST or as a cast weak one, both select the same machine const
+  def test_to_imm_forms(self):
+    for dt in (dtypes.int8, dtypes.uint8, dtypes.int32, dtypes.uint32, dtypes.int64, dtypes.uint64):
+      for v in (0, 1, dt.min, dt.max): self.assertIs(to_imm(UOp.const(v, dt)), to_imm(UOp.const(v).cast(dt)), f"{dt} {v}")
+
+  # a machine const states the number the hardware sees, and only fits an immediate if it fits 4 bytes
+  def test_to_imm_value(self):
+    self.assertIs(to_imm(UOp.const(-1, dtypes.uint32)), machine_const(2**32-1))
+    for dt,v in ((dtypes.int64, 2**31), (dtypes.uint64, 2**32), (dtypes.weakint, 2**31)): self.assertIsNone(to_imm(UOp.const(v, dt)))
 
 if __name__ == "__main__":
   unittest.main()

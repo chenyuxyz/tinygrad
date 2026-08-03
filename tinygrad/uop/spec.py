@@ -45,6 +45,9 @@ def type_verify(ast:UOp|list[UOp], check_spec:PatternMatcher):
 
 # ***** new specs *****
 def matches_dtype(x:UOp, dtype:DType) -> bool: return x.dtype == dtype or x.base.is_invalid  # Invalid matches any dtype
+def valid_special(s:UOp, x:UOp) -> bool:
+  # weakint is widthless launch metadata; a concrete source must agree with SPECIAL's dtype (Invalid agrees with every dtype)
+  return s.dtype in dtypes.ints+(dtypes.weakint,) and (x.dtype is dtypes.weakint or matches_dtype(x, s.dtype)) and isinstance(s.arg, str)
 # these ops can be used in the tensor graph and programs
 spec_shared = PatternMatcher([
   # NOTE: for testing, we let sinks be anything
@@ -158,7 +161,7 @@ spec_tensor = PatternMatcher([
   (UPat(Ops.GETTUPLE, src=(UPat(Ops.TUPLE, name="t"),), name="g"), valid_gettuple),
 
   # SPECIAL is index before index lowering. custom_kernel currently has this
-  (UPat(Ops.SPECIAL, src=(UPat.var("x", dtypes.weakint),), name="s"), lambda s,x: matches_dtype(x, s.dtype) and isinstance(s.arg, str)),
+  (UPat(Ops.SPECIAL, src=(UPat.var("x"),), name="s"), valid_special),
 
   # movement ops
   (UPat((Ops.RESHAPE, Ops.EXPAND), src=(UPat(), UPat())), lambda: True),
@@ -201,11 +204,12 @@ spec_tensor = PatternMatcher([
 
 # these ops can exist in programs but not the tensor spec. example: LOAD
 spec_program = PatternMatcher([
-  # index and weak dtypes are not allowed in programs
-  (UPat(GroupOp.All, (dtypes.weakint, dtypes.weakfloat)), lambda: False),
+  # weak values are bare constants consumed only by CAST, except PARAM shapes and SPECIAL sizes
+  (UPat(GroupOp.All-{Ops.CONST}, dtypes.weaks), lambda: False),
+  (UPat(GroupOp.All-{Ops.CAST, Ops.PARAM, Ops.SPECIAL}, name="u"), lambda u: False if any(s.dtype in dtypes.weaks for s in u.src) else None),
 
   # allow special SHRINK
-  (UPat(Ops.SHRINK, src=(UPat((Ops.PARAM, Ops.BUFFER, Ops.AFTER)), UPat(), UPat(Ops.CONST))), lambda: True),
+  (UPat(Ops.SHRINK, src=(UPat((Ops.PARAM, Ops.BUFFER, Ops.AFTER)), UPat(), UPat(Ops.CONST).or_casted())), lambda: True),
 
   # movement ops are not allowed in programs
   (UPat(GroupOp.Movement), lambda: False),
@@ -221,7 +225,7 @@ spec_program = PatternMatcher([
   (UPat(Ops.ENDIF, dtype=dtypes.void, src=(UPat(Ops.IF),)), lambda: True),
 
   # SPECIAL is int32 after index lowering
-  (UPat(Ops.SPECIAL, src=(UPat.var("x", dtypes.int32),), name="s"), lambda s,x: matches_dtype(x, s.dtype) and isinstance(s.arg, str)),
+  (UPat(Ops.SPECIAL, src=(UPat.var("x"),), name="s"), valid_special),
 ])+spec_shared
 
 spec_hcq = PatternMatcher([

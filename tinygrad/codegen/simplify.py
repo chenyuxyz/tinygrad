@@ -123,10 +123,10 @@ pm_reduce_collapse = pm_reduce_unparented + PatternMatcher([
 
 pm_reduce_load_collapse = pm_reduce_collapse + PatternMatcher([
   # lift x+y out of reduce on ne
-  ((UPat.var("x")+UPat.var("y")).or_casted() != UPat.var("c"), lambda x,y,c: (x != (c.cast(y.dtype)-y)) if no_range(y) and no_range(c) else None),
+  ((UPat.var("x")+UPat.var("y")).or_casted()!=UPat.var("c"), lambda x,y,c: x.cast(c.dtype)!=c-y.cast(c.dtype) if all(map(no_range,(y,c))) else None),
   # reduce on gated load becomes can substitute the range and remove the reduce
   ((UPat.var("idx")!=(UPat(Ops.RANGE, name="r").or_casted())).where(0, UPat.var("expr")).reduce(UPat.var("r"), arg=Ops.ADD),
-   lambda r,idx,expr: (v:=(idx.cast(r.dtype) >= 0) & (idx.cast(r.dtype) < r.src[0])).where(expr.substitute({r:idx.cast(r.dtype).valid(v)}),0)),
+   lambda r,idx,expr: (v:=(idx >= 0) & (idx < r.src[0])).where(expr.substitute({r:idx.valid(v)}),0)),
 ])
 
 def reduce_collapse(red:UOp, u:UOp, pm:PatternMatcher=pm_reduce_collapse) -> UOp|None:

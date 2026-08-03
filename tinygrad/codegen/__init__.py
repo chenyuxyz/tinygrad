@@ -3,7 +3,7 @@ import itertools, functools
 from tinygrad.helpers import DISABLE_FAST_IDIV, TRANSCENDENTAL, SPEC, DEBUG, VIZ, IMAGE, NOOPT, EMULATED_DTYPES, NOLOCALS, USE_TC
 from tinygrad.helpers import ALLOW_TF32, DEFAULT_FLOAT, DEFAULT_INT, TracingKey, Context, panic
 from tinygrad.uop.ops import PatternMatcher, graph_rewrite, UOp, pm_lower_index_dtype, Ops, UPat, track_rewrites, KernelInfo, ProgramInfo, GroupOp
-from tinygrad.uop.ops import AxisType, pm_commit_weak, pm_cast_weak
+from tinygrad.uop.ops import AxisType, pm_address_demand, pm_boundary_demand, pm_commit_weak, pm_lower_weak
 from tinygrad.uop.render import pyrender
 from tinygrad.uop.spec import type_verify, spec_tensor, spec_program
 from tinygrad.renderer import Renderer, Estimates
@@ -12,7 +12,8 @@ from tinygrad.dtype import dtypes, AddrSpace
 
 # import all pattern matchers here
 from tinygrad.codegen.gpudims import pm_add_gpudims
-from tinygrad.uop.symbolic import sym, symbolic_simple, symbolic, pm_move_where_on_load, pm_clean_up_group_sink, pm_remove_invalid
+from tinygrad.uop.symbolic import sym, symbolic_simple, symbolic
+from tinygrad.uop.symbolic import pm_move_where_on_load, pm_clean_up_group_sink, pm_remove_invalid
 from tinygrad.uop.movement import mop_cleanup
 from tinygrad.codegen.decomp.dtype import pm_dtype_decomps
 from tinygrad.codegen.decomp.op import get_late_rewrite_patterns, get_simplifying_rewrite_patterns
@@ -30,10 +31,9 @@ from tinygrad.helpers import all_same, flatten, argsort, partition
 from tinygrad.uop.ops import _broadcast_shape, identity_element
 from tinygrad.schedule.rangeify import BufferizeOpts
 
-def do_number_param(ctx:list[int], x:UOp):
+def do_number_param(ctx:itertools.count, x:UOp):
   if x.arg.slot != -1: return None
-  ctx[0] += 1
-  return x.replace(arg=replace(x.arg, slot=ctx[0]-1))
+  return x.replace(arg=replace(x.arg, slot=next(ctx)))
 
 pm_number_params = PatternMatcher([
   (UPat(Ops.PARAM, name="x"), do_number_param),
@@ -341,34 +341,33 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   # extra symbolic before decomp. crashes without this?
   sink = graph_rewrite(sink, sym, name="extra symbolic")
 
-  # lower index dtype
+  # ***** THE BOUNDARY: weakness ends here *****
+  # above this line a value may be widthless; below it every width is explicit and a rule that mints a const states its width.
+  # the decomps are backend legalization, so they run below: a const-keyed rule down here reads the pair, it does not re-widen it.
   # NOTE: we need indexing_simplify to remove the cast to long using the Invalid
-  sink = graph_rewrite(sink, pm_lower_index_dtype+indexing_simplify, ctx={}, name="lower all index dtypes")
+  sink = graph_rewrite(sink, indexing_simplify, name="final indexing simplification")
+  sink = graph_rewrite(sink, pm_address_demand, name="commit addresses", bottom_up=True)
+  # a consumer's demand decides an index's width first; ROLE is the fallback for the indices no consumer resolved
+  sink = graph_rewrite(sink, pm_lower_index_dtype, name="lower all index dtypes")
+  sink = graph_rewrite(sink, pm_boundary_demand, name="commit remaining roles")
 
-  # final symbolic before decomp
-  sink = graph_rewrite(sink, symbolic, name="final symbolic")
+  sink = graph_rewrite(sink, symbolic+pm_cast_float_alu, name="final symbolic")
 
-  sink = graph_rewrite(sink, pm_cast_float_alu, name="cast float alu operands")
-
-  # **** decomps ****
-
-  # floordiv+mod / dtype decomp (early)
+  # below the boundary weakness re-enters only from minting rounds, so every decomp round carries the commit that closes it
   supported_ops = tuple(ren.code_for_op.keys())
-  pm_decomp = symbolic_simple+get_simplifying_rewrite_patterns(supported_ops)
-  sink = graph_rewrite(sink, pm_decomp, name="early decompositions")
+  pm_commit = pm_commit_weak+pm_lower_weak
+  pm_decomp = symbolic_simple+get_simplifying_rewrite_patterns(supported_ops)+get_late_rewrite_patterns(supported_ops, bool(DISABLE_FAST_IDIV))
+  sink = graph_rewrite(sink, pm_decomp+pm_commit, ctx=ren, name="early decompositions")
 
-  # late decomps + move gates from unrenderable INVALID where
-  sink = graph_rewrite(sink, pm_dtype_decomps+pm_commit_weak, ctx=(set(), ren), name="decomp dtypes")
-  pm_decomp = pm_decomp+\
-    get_late_rewrite_patterns(supported_ops, bool(DISABLE_FAST_IDIV))+\
-    get_transcendental_patterns(supported_ops, TRANSCENDENTAL>=2)
-  sink = graph_rewrite(sink, pm_decomp, ctx=ren, name="late decompositions")
+  sink = graph_rewrite(sink, pm_dtype_decomps, ctx=(set(), ren), name="decomp dtypes")
+  sink = graph_rewrite(sink, pm_commit, name="commit decomp dtypes")
+  pm_decomp = pm_decomp+get_transcendental_patterns(supported_ops, TRANSCENDENTAL>=2)
+  sink = graph_rewrite(sink, pm_decomp+pm_commit, ctx=ren, name="late decompositions")
   sink = graph_rewrite(sink, pm_move_gates_from_index, name="move gates from index")
 
-  # final rules for the renderer (without sym)
-  extra_matcher = ren.extra_matcher if ren.extra_matcher is not None else PatternMatcher([])
-  pm_final_rewrite = pm_commit_weak+pm_cast_weak+pm_decomp+extra_matcher+pm_split_ends
-  sink = graph_rewrite(sink, pm_final_rewrite+pm_remove_invalid, ctx=ren, name="final rewrite")
+  # renderer matchers in extra_matcher may mint weak too, so the last round commits as well
+  sink = graph_rewrite(sink, pm_decomp+pm_commit+(ren.extra_matcher or PatternMatcher([]))+pm_split_ends+pm_remove_invalid,
+                       ctx=ren, name="final rewrite")
 
   # add implicit barriers (stores/loads through LOCAL memory ordered by AFTER or across loop iterations need workgroup barriers)
   sink = graph_rewrite(sink, pm_implicit_barriers, name="add implicit barriers")
@@ -378,7 +377,8 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
 
   # put unnumbered variable PARAMs in slots
   num_params = len([x for x in sink.toposort() if x.op is Ops.PARAM and x.arg.slot != -1])
-  sink = graph_rewrite(sink, pm_number_params, ctx=[num_params], name="number params with -1", walk=True)
+  sink = graph_rewrite(sink, pm_number_params+pm_commit_weak+pm_lower_weak, ctx=itertools.count(num_params),
+                       name="number params and final commit", walk=True)
 
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Output AST")
   if SPEC: type_verify(sink, spec_program)

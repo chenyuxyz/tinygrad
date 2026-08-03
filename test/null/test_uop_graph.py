@@ -325,7 +325,7 @@ class TestUOpGraph(unittest.TestCase):
     alu = (ld<1).cast(dtypes.bool)
     out = d0.index(idx).store(alu)
     uops = to_uops_list([out])
-    self.assertEqual(len([x for x in uops if x.op is Ops.CAST]), 0)
+    self.assertTrue(all(x.src[0].op is Ops.CONST for x in uops if x.op is Ops.CAST))
 
   def test_double_cast_fold(self):
     d0 = UOp.param(0, dtypes.float, (1,))
@@ -335,7 +335,7 @@ class TestUOpGraph(unittest.TestCase):
     alu = ld.cast(dtypes.float).cast(dtypes.float)
     out = d0.index(idx).store(alu)
     uops = to_uops_list([out])
-    self.assertEqual(len([x for x in uops if x.op is Ops.CAST]), 1)
+    self.assertEqual(len([x for x in uops if x.op is Ops.CAST and x.src[0].op is not Ops.CONST]), 1)
 
   def test_depth_2_const_fold(self):
     v = UOp.variable("tmp", 0, 1, dtypes.int)
@@ -372,7 +372,7 @@ class TestUOpGraph(unittest.TestCase):
     uops = to_uops_list([out.index(ridx0).store(w)])
     for u in uops:
       assert u.op is not Ops.WHERE
-      if u.op is Ops.LOAD and u.src[0].src[0].op is Ops.PARAM: assert u.src[1].val==5
+      if u.op is Ops.LOAD and u.src[0].src[0].op is Ops.PARAM: assert u.src[1] is UOp.const(5).cast(dtypes.long)
 
   def test_where_on_gated_load_folds_swapped_branches(self):
     ridx0 = UOp.range(100, 0)
@@ -382,7 +382,7 @@ class TestUOpGraph(unittest.TestCase):
     uops = to_uops_list([w])
     for u in uops:
       assert u.op is not Ops.WHERE
-      if u.op is Ops.LOAD: assert u.src[1].val==5
+      if u.op is Ops.LOAD: assert u.src[1] is UOp.const(5).cast(dtypes.long)
 
   def test_where_on_gated_load_with_cast(self):
     ridx0 = UOp.range(100, 0)
@@ -394,7 +394,7 @@ class TestUOpGraph(unittest.TestCase):
     uops = to_uops_list([out.index(ridx0).store(w)])
     for u in uops:
       assert u.op is not Ops.WHERE
-      if u.op is Ops.LOAD and u.src[0].src[0].op is Ops.PARAM: assert u.src[1].val == 5
+      if u.op is Ops.LOAD and u.src[0].src[0].op is Ops.PARAM: assert u.src[1] is UOp.const(5, dtypes.int)
 
   def test_where_on_casted_gated_load_extra_cond(self):
     ridx0 = UOp.range(100, 0)
@@ -426,7 +426,7 @@ class TestUOpGraph(unittest.TestCase):
     uops = to_uops_list([st])
     for u in uops:
       assert u.op is not Ops.WHERE
-      if u.op is Ops.STORE: assert u.src[1].val==5
+      if u.op is Ops.STORE: assert u.src[1] is UOp.const(5).cast(dtypes.long)
 
   def test_load_idx_becomes_int(self):
     # mnist indexing with split reduceop
