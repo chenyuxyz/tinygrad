@@ -72,6 +72,12 @@ class WGSLRenderer(CStyleLanguage):
     (UPat(Ops.CONST, dtype=(dtypes.uchar, dtypes.ushort, dtypes.uint32), name="x"),
      lambda x: f"bitcast<u32>({x.val})" if x.val < 0 else f"{x.val&0xFFFFFFFF}u"),
     (UPat(Ops.CONST, dtype=dtypes.int32, name="x"), lambda ctx,x: f"{truncate[x.dtype](x.val)}"),
+    # the pair reads as the typed constant it commits to
+    (UPat(Ops.CAST, dtype=(dtypes.uchar, dtypes.ushort, dtypes.uint32), src=(UPat(Ops.CONST, dtypes.weaks, name="c"),)),
+     lambda c: f"bitcast<u32>({c.val})" if c.val < 0 else f"{c.val&0xFFFFFFFF}u"),
+    (UPat(Ops.CAST, dtype=dtypes.int32, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+     lambda ctx,x,c: f"{truncate[x.dtype](c.val)}"),
+    (UPat(Ops.CAST, dtype=dtypes.bool, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),)), lambda c: "true" if c.val else "false"),
     (UPat(Ops.BUFFER, name="x"), lambda ctx,x:
      f"var{'<workgroup>' if x.addrspace == AddrSpace.LOCAL else ''} {ctx[x]}: array<{ctx.buf_map(x)},{_packed_size(x)}>;"),
     (UPat(Ops.BITCAST, dtype=dtypes.half, name="x", src=(UPat(dtype=(dtypes.short, dtypes.ushort, dtypes.uint32),),)),

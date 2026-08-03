@@ -80,6 +80,11 @@ def modifier(a: DType, b: DType): return '.rzi' if dtypes.is_int(a) and dtypes.i
 
 string_rewrite = PatternMatcher([
   (UPat.cvar("x", dtypes.bool), lambda ctx, x: f"setp.ne.s16 {ctx.r[x]}, {render_val(x.val, x.dtype)}, 0;"),
+  # the pair reads as the typed constant it commits to
+  (UPat(Ops.CAST, dtypes.bool, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+   lambda ctx,x,c: f"setp.ne.s16 {ctx.r[x]}, {render_val(c.val, x.dtype)}, 0;"),
+  (UPat(Ops.CAST, src=(UPat(Ops.CONST, dtypes.weaks, name="c"),), name="x"),
+   lambda ctx,x,c: f"mov.b{ctx.types[x.dtype][1:]} {ctx.r[x]}, {render_val(c.val, x.dtype)};"),
   (UPat.cvar("x"), lambda ctx, x: f"mov.b{ctx.types[x.dtype][1:]} {ctx.r[x]}, {render_val(x.val, x.dtype)};"),
   (UPat(Ops.SPECIAL, name="x"), lambda ctx,x: f"mov.u32 %{x.arg}, %{'ctaid' if x.arg[0] == 'g' else 'tid'}.{chr(120+int(x.arg[-1]))};"),
   (UPat(Ops.PARAM, name="x"), lambda ctx, x:
@@ -186,7 +191,7 @@ class PTXRenderer(Renderer):
 
     name = "test"
     for u in uops:
-      if u.op in {Ops.NOOP, Ops.GROUP}: continue
+      if u.op in {Ops.NOOP, Ops.GROUP} or (u.op is Ops.CONST and u.dtype in dtypes.weaks): continue
       if u.op is Ops.AFTER:
         self.r[u] = self.r[u.src[0]]
         continue

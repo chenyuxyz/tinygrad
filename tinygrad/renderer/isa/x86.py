@@ -225,7 +225,11 @@ def lane(x:UOp, i:int) -> int: return s.src[1].val if (s:=x.src[i]).op is Ops.IN
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
 def def_reg(dt:DType, reg:Register|None=None) -> UOp: return UOp(Ops.INS, dt, arg=X86Ops.DEFINE, tag=None if reg is None else (reg,))
 def imm(dt:DType, v:int) -> UOp: return UOp.const(truncate[dt](v), dt).rtag()
+# a committed constant reaches isel in either honest form; the pair states the same number at the same width
+def is_pair(u:UOp) -> bool: return u.op is Ops.CAST and u.src[0].op is Ops.CONST and u.src[0].dtype in dtypes.weaks
+def unpair(u:UOp) -> UOp: return UOp.const(u.src[0].val, u.dtype) if is_pair(u) else u
 def to_imm(c:UOp) -> UOp|None:
+  c = unpair(c)
   if c.op is not Ops.CONST: return None
   if c.dtype is dtypes.int64: return imm(dtypes.int32, c.val) if not c.overflows(dtypes.int32) else None
   if c.dtype is dtypes.uint64: return imm(dtypes.uint32, c.val) if not c.overflows(dtypes.uint32) else None
@@ -647,6 +651,7 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     # 0b10 -- signals memory access with 32bit displacement
     # 0b11 -- signals no memory access
     if disp_uop is not None:
+      disp_uop = unpair(disp_uop)
       assert disp_uop.op is Ops.CONST, "displacement must be a constant"
       assert disp_uop.dtype in (dtypes.int8, dtypes.int32), "displacement can only be 1 or 4 byte signed int"
       # rbp/r13 always require a displacement
@@ -667,7 +672,7 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
       inst += struct.pack(unwrap(disp_uop.dtype.fmt), disp_uop.val)
     # IMM byte
     if imm_uop is not None:
-      if imm_uop.op is Ops.CONST: inst += struct.pack(unwrap(imm_uop.dtype.fmt), imm_uop.val)
+      if (c:=unpair(imm_uop)).op is Ops.CONST: inst += struct.pack(unwrap(c.dtype.fmt), c.val)
       elif isinstance(greg(imm_uop), Register): inst += bytes([(greg(imm_uop).index & 0b1111) << 4 | 0b0000])
     return inst
 
@@ -677,13 +682,13 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
   if x.arg in X86GroupOp.WriteMem:
     if len(x.src) > 4: address, rest = x.src[:4], x.src[4:]
     else: address, rest = (x, None, None, None), x.src
-    imm_uop = rest[:1] if rest and rest[0].op is Ops.CONST else (None,)
+    imm_uop = rest[:1] if rest and (rest[0].op is Ops.CONST or is_pair(rest[0])) else (None,)
     return _encode(rest[0], *address, *(None, *rest[1:])) if reg is None else _encode(None, *address, *(None, *imm_uop))
 
   if x.arg in X86GroupOp.Rm1st:
     if len(x.src) > 3: address, rest = x.src[:4], x.src[4:]
     else: address, rest = (x.src[0], None, None, None), x.src[1:]
-    imm_uop = rest[:1] if rest and rest[0].op is Ops.CONST else (None,)
+    imm_uop = rest[:1] if rest and (rest[0].op is Ops.CONST or is_pair(rest[0])) else (None,)
     return _encode(x, *address, *(None, *imm_uop)) if reg is None else _encode(None, *address, *(x if sel else None, *imm_uop))
 
   if x.arg in X86GroupOp.Rm2nd:

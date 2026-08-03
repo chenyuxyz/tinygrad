@@ -170,7 +170,10 @@ class LLVMRenderer(Renderer):
           kernel.append(f"  {r[u]} = addrspacecast [{size} x {ldt(u.dtype)}] addrspace(3)* @{r[u][1:]} to [{size} x {ldt(u.dtype)}]*")
         else:
           kernel.append(f"  {r[u]} = alloca [{size} x {ldt(u.dtype)}], align 16")
+      # a bare weak CONST has no width: it is only the value half of a pair, rendered by its CAST parent
+      elif u.op is Ops.CONST and u.dtype in dtypes.weaks: continue
       elif u.op is Ops.CONST: r[u] = lconst(u.val, u.dtype)
+      elif u.op is Ops.CAST and u.src[0].op is Ops.CONST and u.src[0].dtype in dtypes.weaks: r[u] = lconst(u.src[0].val, u.dtype)
       elif u.op is Ops.CAST and ldt(u.dtype) == ldt(u.src[0].dtype):
         r[u] = r[u.src[0]] # cast from signed to unsigned of the same size is a noop, or pointer cast
       else:
