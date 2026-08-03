@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from tinygrad.renderer import Renderer
 from tinygrad.uop.ops import PatternMatcher, UOp, Ops, consumer_map_from_toposort
 
+# a constant an instruction reads directly: a number with no width of its own, the field it lands in decides how many bytes are written.
+# the tag marks it as already selected so isel doesn't materialize it into a register
+def machine_const(v:int) -> UOp: return UOp.const(v).rtag()
+
 @dataclass(frozen=True)
 class Register:
   name: str
