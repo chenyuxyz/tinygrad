@@ -11,10 +11,13 @@ from tinygrad.codegen.decomp.transcendental import exponent_bias, shl, shr
 l2i_dt = {dtypes.long: dtypes.int, dtypes.ulong: dtypes.uint}
 def unpack32(v:UOp) -> tuple[UOp, UOp]: return v.bitcast(dtypes.uint) & 0xFFFF, shr(v.bitcast(dtypes.uint), 16)
 def reindex(idx:UOp, off:int, mul=2) -> UOp:
+  # the word this becomes is stated identity-free: a unit scale and a zero offset are not written down
+  new_idx = idx.src[1]*mul if mul != 1 else idx.src[1]
+  if off: new_idx = new_idx+off
   if idx.op is Ops.SHRINK:
     assert mul == 1, "can't reindex SHRINK with mul != 1"
-    return idx.replace(op=Ops.INDEX, src=(idx.src[0], idx.src[1]+off))
-  return idx.replace(src=(idx.src[0], idx.src[1]*mul+off, *idx.src[2:]))
+    return idx.replace(op=Ops.INDEX, src=(idx.src[0], new_idx))
+  return idx.replace(src=(idx.src[0], new_idx, *idx.src[2:]))
 
 # 4.3.1 is the relevant section in TAOCP
 def l2i(op: Ops, dt: DType, *uops:UOp):
@@ -131,7 +134,15 @@ def f2f_store(st, idx, val, fr:DType, to:DType):
   return UOp.group(*(st.replace(src=(reindex(idx, i, 1), f2f(val.index(i).bitcast(f2f_dt[to]), to, fr))) for i in range(n)))
 
 # tag is the 32-bit word this node becomes - (0 for the low word, 1 for the high, the dtype the consumer wants)
+word_tags = {(w, dt) for w in (0, 1) for dt in l2i_dt.values()}
+def const_word(x:UOp) -> UOp:
+  # the committed pair states a long constant's width on its CAST, so the value is read through it
+  v, (word, dt) = int((x.src[0] if x.op is Ops.CAST else x).val), x.tag
+  return UOp.const(truncate[dt]((v >> 32) if word == 1 else (v & 0xFFFFFFFF)), dt)
+
 pm_long_decomp = PatternMatcher([
+  # a long constant is a constant however it is spelled: take its word directly, never decompose the CAST that commits it
+  (UPat(Ops.CAST, tuple(l2i_dt.keys()), src=(UPat(Ops.CONST),), tag=word_tags, name='x'), const_word),
   (UPat(GroupOp.Defines, src=(UPat.var("sz"),), name="x"), lambda x,sz:
    x.replace(dtype=l2i_dt[x.dtype], arg=replace(x.arg, dtype=l2i_dt[x.dtype]), src=(sz*2,)) if x.dtype in l2i_dt else None),
   (UPat(Ops.INDEX, tuple(l2i_dt.keys()), name='x'), lambda x:
@@ -157,8 +168,7 @@ pm_long_decomp = PatternMatcher([
    if x.tag is not None else None),
   (UPat(Ops.LOAD, tuple(l2i_dt.keys()), src=(UPat.var('idx'),), name='x'), lambda x,idx:
    x.replace(dtype=l2i_dt[x.dtype], src=(reindex(idx, x.tag[0]).replace(dtype=l2i_dt[x.dtype], tag=None),), tag=None) if x.tag is not None else None),
-  (UPat(Ops.CONST, tag={(w, dt) for w in (0, 1) for dt in l2i_dt.values()}, name='x'), lambda x:
-   UOp.const(truncate[x.tag[1]]((x.val >> 32) if x.tag[0] == 1 else (x.val & 0xFFFFFFFF)), x.tag[1]))
+  (UPat(Ops.CONST, tag=word_tags, name='x'), const_word)
 ])
 
 # float decomposition patterns - ctx is (fr, to) tuple

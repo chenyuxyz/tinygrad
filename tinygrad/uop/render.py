@@ -99,12 +99,11 @@ pm_pyrender_extra = PatternMatcher([
   # TODO: movement ops simplify stuff, this can break SPEC=2
   #(UPat(GroupOp.Movement, name="x"), lambda ctx,x: f"{ctx[x.src[0]]}.{x.op.name.lower()}({render_marg(ctx,x)})"),
   # NOTE: CMPNE doesn't work cause there's no __rne__
-  # explicit trunc ops: `//` and `%` parse as FLOORDIV/FLOORMOD, so render CDIV/CMOD via .alu()
-  (UPat(Ops.CDIV, name="x"), lambda ctx,x: f"{ctx[x.src[0]]}.alu(Ops.CDIV, {ctx[x.src[1]]})"),
-  (UPat(Ops.CMOD, name="x"), lambda ctx,x: f"{ctx[x.src[0]]}.alu(Ops.CMOD, {ctx[x.src[1]]})"),
+  # explicit trunc ops and shifts: Python syntax changes their op or re-promotes operands, so render them via .alu()
+  (UPat((Ops.CDIV, Ops.CMOD, Ops.SHL, Ops.SHR), name="x"), lambda ctx,x: f"{ctx[x.src[0]]}.alu(Ops.{x.op.name}, {ctx[x.src[1]]})"),
   # `.where` re-promotes its operands, so render WHERE via .alu() too
   (UPat(Ops.WHERE, name="x"), lambda ctx,x: f"{ctx[x.src[0]]}.alu(Ops.WHERE, {ctx[x.src[1]]}, {ctx[x.src[2]]})"),
-  (UPat(set(syms.keys())-{Ops.SUB, Ops.CDIV, Ops.CMOD}, name="x"), lambda ctx,x:
+  (UPat(set(syms.keys())-{Ops.SUB, Ops.CDIV, Ops.CMOD, Ops.SHL, Ops.SHR}, name="x"), lambda ctx,x:
     strip_binary_parens(x, ctx[x.src[0]], ctx[x.src[1]], lambda a,b: f"({a}{syms[x.op]}{b})")),
   (UPat(sugar, src=(), name="x"), lambda x: f"UOp.{x.op.name.lower()}("+', '.join(([f'arg={repr(x.arg)}'] if x.arg is not None else []))+")"),
   (UPat(sugar, name="x"), lambda ctx,x: f"{ctx[x.src[0]]}.{x.op.name.lower()}("+', '.join([ctx[y] for y in x.src[1:]] + \

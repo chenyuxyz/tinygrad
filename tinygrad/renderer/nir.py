@@ -187,7 +187,8 @@ class NIRRenderer(Renderer):
 
   def render(self, uops:list[UOp]):
     self.prerender(uops)
-    for u in [u for u in uops if u.op is Ops.SPECIAL and u.arg[0] == "l"]: self.b.shader.contents.info.workgroup_size[int(u.arg[-1])] = u.src[0].val
+    for u in [u for u in uops if u.op is Ops.SPECIAL and u.arg[0] == "l"]:
+      self.b.shader.contents.info.workgroup_size[int(u.arg[-1])] = u.src[0].ssimplify()
     self.r: dict[UOp, Any] = {}
     self.param_idx = 0
     ranges: list[mesa.nir_def|None] = []
@@ -196,7 +197,7 @@ class NIRRenderer(Renderer):
       if u.op in {Ops.NOOP, Ops.GROUP} or (u.op is Ops.STACK and len(u.src) == 0) or (u.op is Ops.CONST and u.dtype in dtypes.weaks): pass
       elif u.op in {Ops.INDEX, Ops.SHRINK}:
         # INDEX on a register value picks the element, memory INDEX is handled in the LOAD/STORE patterns
-        if u.src[0].op not in {Ops.PARAM, Ops.BUFFER, Ops.AFTER}: self.r[u] = nchannel(self.b, self.r[u.src[0]], u.src[1].val)
+        if u.src[0].op not in {Ops.PARAM, Ops.BUFFER, Ops.AFTER}: self.r[u] = nchannel(self.b, self.r[u.src[0]], u.src[1].ssimplify())
       elif u.op is Ops.AFTER:
         self.r[u] = self.r[u.src[0]]
       elif u.op == Ops.SINK:
