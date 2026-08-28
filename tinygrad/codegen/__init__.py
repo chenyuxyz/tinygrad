@@ -418,8 +418,11 @@ def line_rewrite(lst:list[UOp], pm:PatternMatcher, ctx=None) -> list[UOp]:
 
 def do_linearize(ctx:Renderer, prg:UOp, sink:UOp) -> UOp:
   if DEBUG >= 3 and sink.arg.applied_opts: print(f"{sink.arg.function_name:<25} opts: {sink.arg.applied_opts}")
+  # isa renderers select machine instructions, then allocate registers
+  if isinstance(ctx, ISARenderer):
+    sink = graph_rewrite(sink, ctx.pre_isel_matcher, ctx=itertools.count(-1, -1), name="pre instruction selection", bottom_up=True)
+    sink = graph_rewrite(sink, ctx.isel_matcher, ctx=IselContext(sink), name="instruction selection", bottom_up=True)
   lst = line_rewrite(linearize(sink), pm_linearize_cleanups)
-  # isa renderers need to allocate registers
   if isinstance(ctx, ISARenderer):
     if ctx.pre_regalloc_matcher is not None: lst = line_rewrite(lst, ctx.pre_regalloc_matcher, PreRegAllocContext())
     # register definitions (INS without srcs) move to the top so regalloc sees their live ranges span the whole program (callee saved regs)
@@ -430,9 +433,10 @@ def do_linearize(ctx:Renderer, prg:UOp, sink:UOp) -> UOp:
     if DEBUG >= 4: print(ctx.asm_str(lst, sink.arg.function_name))
   return prg.replace(src=prg.src + (UOp(Ops.LINEAR, src=tuple(lst)),))
 
-def do_estimates(prg:UOp, sink:UOp, lin:UOp) -> UOp|None:
+def do_estimates(prg:UOp, sink:UOp) -> UOp|None:
   if sink.arg.estimates is not None: return None
-  return prg.replace(src=(sink.replace(arg=replace(sink.arg, estimates=Estimates.from_uops(lin.src, ignore_indexing=True))),)+prg.src[1:])
+  est = Estimates.from_uops(tuple(linearize(sink)), ignore_indexing=True)
+  return prg.replace(src=(sink.replace(arg=replace(sink.arg, estimates=est)),)+prg.src[1:])
 
 def do_assemble(ctx:Renderer, prg:UOp, lin:UOp) -> UOp:
   src = "\n".join(str(u.arg) for u in lin.src)
@@ -452,7 +456,7 @@ def do_compile(ctx:Renderer, prg:UOp, source:UOp) -> UOp|None:
 
 pm_to_program = PatternMatcher([
   (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK, name="sink"),), name="prg"), do_linearize),
-  (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK, name="sink"), UPat(Ops.LINEAR, name="lin")), name="prg"), do_estimates),
+  (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK, name="sink"), UPat(Ops.LINEAR)), name="prg"), do_estimates),
   (UPat(Ops.PROGRAM, src=(UPat(), UPat(Ops.LINEAR, src=UPat(Ops.INS), name="lin")), name="prg"), do_assemble),
   (UPat(Ops.PROGRAM, src=(UPat(), UPat(Ops.LINEAR, name="lin")), name="prg"), do_render),
   (UPat(Ops.PROGRAM, src=(UPat(), UPat(Ops.LINEAR), UPat(Ops.SOURCE, name="source")), name="prg"), do_compile),
@@ -475,12 +479,7 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
   elif ast.op is Ops.SINK:
     assert isinstance(ast.arg, KernelInfo), "requires KernelInfo on arg to to_program"
     full_sink = full_rewrite_to_sink(ast, renderer, optimize=ast.tag is None)
-    prog_info = ProgramInfo.from_sink(full_sink, renderer.target)
-    # instruction selection
-    if isinstance(renderer, ISARenderer):
-      full_sink = graph_rewrite(full_sink, renderer.pre_isel_matcher, ctx=itertools.count(-1, -1), name="pre instruction selection", bottom_up=True)
-      full_sink = graph_rewrite(full_sink, renderer.isel_matcher, ctx=IselContext(full_sink), name="instruction selection", bottom_up=True)
-    prg = UOp(Ops.PROGRAM, src=(full_sink,), arg=prog_info)
+    prg = UOp(Ops.PROGRAM, src=(full_sink,), arg=ProgramInfo.from_sink(full_sink, renderer.target))
   else: raise RuntimeError(f"can't call to_program on {ast.op}")
   if not isinstance(prg.arg, ProgramInfo): prg = prg.replace(arg=ProgramInfo.from_sink(prg.src[0], renderer.target))
   prg = graph_rewrite(prg, pm_to_program, ctx=renderer, name="linearize/render")
