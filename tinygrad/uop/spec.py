@@ -48,7 +48,7 @@ def matches_dtype(x:UOp, dtype:DType) -> bool: return x.dtype == dtype or x.base
 # these ops can be used in the tensor graph and programs
 spec_shared = PatternMatcher([
   # NOTE: for testing, we let sinks be anything
-  (UPat(Ops.SINK, dtypes.void), lambda: True),
+  (UPat(Ops.SINK), lambda: True),
 
   # NOOP. TODO: remove this
   (UPat(Ops.NOOP), lambda: True),
@@ -57,7 +57,7 @@ spec_shared = PatternMatcher([
   (UPat(Ops.CONST, src=(), name="x"), lambda x: x.is_invalid or type(x.val) is type(x.dtype.const(x.val))),
 
   # STACK is everywhere too
-  (UPat(Ops.STACK, dtype=dtypes.void, src=()), lambda: True),
+  (UPat(Ops.STACK, src=()), lambda: True),
   (UPat(Ops.STACK, src=(UPat(),), allow_any_len=True, name="s"),
    lambda s: all_same([x.shape for x in s.src]) and all(matches_dtype(x, s.dtype) or x.dtype in dtypes.weaks for x in s.src)),
 
@@ -91,7 +91,7 @@ spec_shared = PatternMatcher([
   (UPat(Ops.BUFFER, src=(), name="x"), lambda x: isinstance(x.arg, ParamArg) and x.addrspace in (AddrSpace.REG, AddrSpace.LOCAL)),
 
   # GROUP of stores (or groups, or NOOPs)
-  (UPat(Ops.GROUP, dtypes.void, src=UPat((Ops.GROUP, Ops.STORE, Ops.NOOP, Ops.INS, Ops.END))), lambda: True),
+  (UPat(Ops.GROUP, src=UPat((Ops.GROUP, Ops.STORE, Ops.NOOP, Ops.INS, Ops.END))), lambda: True),
 
   # AFTER on Movement Op, PARAM, BUFFER, CONTIGUOUS, or another AFTER
   (UPat(Ops.AFTER, src=(UPat(GroupOp.Movement.union({Ops.PARAM, Ops.BUFFER, Ops.CONTIGUOUS, Ops.INDEX,
@@ -110,7 +110,7 @@ spec_shared = PatternMatcher([
   (UPat(Ops.PYLITERAL), lambda: True),
 
   # BARRIER (on any length). TODO: this should only be in spec_program
-  (UPat(Ops.BARRIER, dtypes.void), lambda: True),
+  (UPat(Ops.BARRIER), lambda: True),
 
   # assembly instruction
   (UPat(Ops.INS, name="x"), lambda x: isinstance(x.arg, tuple) and len(x.arg) == 2 and isinstance(x.arg[1], DType)),
@@ -123,7 +123,7 @@ spec_shared = PatternMatcher([
   (UPat((Ops.INDEX, Ops.SHRINK), name="uidx").or_casted().store(UPat(), UPat.var("gate", dtype=dtypes.bool)), validate_index),
 
   # STORE in tensor graph: store a value into a target
-  (UPat(Ops.STORE, dtypes.void, (UPat(name="x"), UPat())), lambda x: True),
+  (UPat(Ops.STORE, src=(UPat(name="x"), UPat())), lambda x: True),
 
   # WMMA has a <a, b, acc>
   (UPat(Ops.WMMA, src=(UPat(), UPat(), UPat()), name="x"), lambda x: isinstance(x.arg, tuple) and len(x.arg) == 5),
@@ -154,7 +154,7 @@ spec_tensor = PatternMatcher([
 
   # value-producing CALLs and TUPLEs must have void dtype, GETTUPLE can only appear on CALL or TUPLE
   (UPat(Ops.CALL, dtypes.void, src=(UPat(Ops.TUPLE),), allow_any_len=True), lambda: True),
-  (UPat(Ops.TUPLE, dtypes.void), lambda: True),
+  (UPat(Ops.TUPLE), lambda: True),
   (UPat(Ops.GETTUPLE, src=(UPat(Ops.CALL, src=(UPat(Ops.TUPLE, name="t"),), allow_any_len=True),), name="g"), valid_gettuple),
   (UPat(Ops.GETTUPLE, src=(UPat(Ops.TUPLE, name="t"),), name="g"), valid_gettuple),
 
@@ -190,13 +190,13 @@ spec_tensor = PatternMatcher([
   (UPat(Ops.STAGE, src=(UPat(),), allow_any_len=True), lambda: True),
 
   # codegen: PROGRAM with progressive sources through the pipeline (SINK, LINEAR?, SOURCE?, BINARY?)
-  (UPat(Ops.LINEAR, dtypes.void), lambda: True),
-  (UPat(Ops.SOURCE, dtypes.void, src=()), lambda: True),
+  (UPat(Ops.LINEAR), lambda: True),
+  (UPat(Ops.SOURCE, src=()), lambda: True),
   (UPat(Ops.BINARY, dtypes.uint8, src=(), name="x"), lambda x: isinstance(x.arg, bytes)),
-  (UPat(Ops.PROGRAM, dtypes.void, src=(UPat(Ops.SINK),)), lambda: True),
-  (UPat(Ops.PROGRAM, dtypes.void, src=(UPat(Ops.SINK), UPat(Ops.LINEAR))), lambda: True),
-  (UPat(Ops.PROGRAM, dtypes.void, src=(UPat(Ops.SINK), UPat(Ops.LINEAR), UPat(Ops.SOURCE))), lambda: True),
-  (UPat(Ops.PROGRAM, dtypes.void, src=(UPat(Ops.SINK), UPat(Ops.LINEAR), UPat(Ops.SOURCE), UPat(Ops.BINARY))), lambda: True),
+  (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK),)), lambda: True),
+  (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK), UPat(Ops.LINEAR))), lambda: True),
+  (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK), UPat(Ops.LINEAR), UPat(Ops.SOURCE))), lambda: True),
+  (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK), UPat(Ops.LINEAR), UPat(Ops.SOURCE), UPat(Ops.BINARY))), lambda: True),
 ])+spec_shared
 
 # these ops can exist in programs but not the tensor spec. example: LOAD
@@ -218,8 +218,8 @@ spec_program = PatternMatcher([
   (UPat(Ops.CONST, arg=Invalid), lambda: False),
 
   # if has a <gate, index_for_dedup>
-  (UPat(Ops.IF, dtype=dtypes.void, src=(UPat(dtype=dtypes.bool), UPat((Ops.CAST, Ops.INDEX, Ops.SHRINK)))), lambda: True),
-  (UPat(Ops.ENDIF, dtype=dtypes.void, src=(UPat(Ops.IF),)), lambda: True),
+  (UPat(Ops.IF, src=(UPat(dtype=dtypes.bool), UPat((Ops.CAST, Ops.INDEX, Ops.SHRINK)))), lambda: True),
+  (UPat(Ops.ENDIF, src=(UPat(Ops.IF),)), lambda: True),
 
   # SPECIAL is int32 after index lowering
   (UPat(Ops.SPECIAL, src=(UPat(dtype=dtypes.int32),), name="s"), lambda s: isinstance(s.arg, str)),
@@ -228,12 +228,12 @@ spec_program = PatternMatcher([
 spec_hcq = PatternMatcher([
   (UPat(Ops.GETADDR, dtypes.uint64, src=(UPat((Ops.BUFFER, Ops.PARAM, Ops.SHRINK, Ops.BITCAST, Ops.MSTACK)).or_after(),), name="x"),
    lambda x: is_device(x.arg)),
-  (UPat(Ops.PROGRAM, dtypes.void, src=(UPat((Ops.BUFFER, Ops.PARAM)).or_after(),)), lambda: True),
+  (UPat(Ops.PROGRAM, src=(UPat((Ops.BUFFER, Ops.PARAM)).or_after(),)), lambda: True),
 ])+spec_shared
 
 # these are intermediate ops. everything should be deleted from here
 spec_full = PatternMatcher([
-  (UPat(Ops.REWRITE_ERROR, dtypes.void, name="x"), lambda x: isinstance(x.arg, str)),
+  (UPat(Ops.REWRITE_ERROR, name="x"), lambda x: isinstance(x.arg, str)),
 
   # codegen may end ranges after gpudims has replaced RANGE with SPECIAL.
   (UPat(Ops.END, src=(UPat(), UPat()), allow_any_len=True), lambda: True),
@@ -249,9 +249,9 @@ spec_full = PatternMatcher([
 
 spec_kernel_graph = PatternMatcher([
   # sink
-  (UPat(Ops.SINK, dtypes.void), lambda: True),
+  (UPat(Ops.SINK), lambda: True),
   # the store of a bound Variable binds it: AFTER(BUFFER, STORE(BUFFER, CONST)) in call args
-  (UPat(Ops.STORE, dtypes.void, (UPat(Ops.BUFFER, name="b"), UPat(Ops.CONST))), lambda b: b.is_variable),
+  (UPat(Ops.STORE, src=(UPat(Ops.BUFFER, name="b"), UPat(Ops.CONST))), lambda b: b.is_variable),
   # const + stack to make vconsts and shape args. a 0-size/bound reduce keeps its const casted
   (UPat(Ops.CONST, src=()), lambda: True),
   (UPat(Ops.CAST, src=(UPat(Ops.CONST, src=()),)), lambda: True),
