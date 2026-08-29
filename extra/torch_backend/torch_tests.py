@@ -3,8 +3,9 @@ import unittest
 import torch
 import extra.torch_backend.backend
 
-from torch.testing._internal.common_utils import TestCase, is_privateuse1_backend_available
-assert is_privateuse1_backend_available() and torch._C._get_privateuse1_backend_name() == "tiny"
+from torch.testing._internal.common_utils import TestCase
+# NOTE: this is what torch's own is_privateuse1_backend_available did, inlined: it went private in torch 2.13
+assert torch.tiny.is_available() and torch._C._get_privateuse1_backend_name() == "tiny"
 from torch.testing._internal.common_device_type import ops, onlyOn, instantiate_device_type_tests
 from torch.testing._internal.common_methods_invocations import unary_ufuncs, binary_ufuncs, reduction_ops, shape_funcs
 
