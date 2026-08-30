@@ -64,47 +64,49 @@ class WebGPUProgram(Program['WebGpuDevice']):
     if err := self.dev.pop_error(): raise RuntimeError(f"Shader compilation failed: {err}")
 
   @suppress_finalizing
-  def __del__(self): webgpu.wgpuShaderModuleRelease(self.prg)
+  def __del__(self):
+    if hasattr(self, "pipeline"):
+      webgpu.wgpuComputePipelineRelease(self.pipeline)
+      webgpu.wgpuBindGroupLayoutRelease(self.bind_layout)
+      for buf in self.val_bufs: self.dev.free(buf)
+    webgpu.wgpuShaderModuleRelease(self.prg)
 
   def __call__(self, *bufs:webgpu.WGPUBuffer, global_size:tuple[int,int,int]=(1,1,1), local_size:tuple[int,int,int]=(1,1,1),
                vals:tuple[int, ...]=(), wait=False, **kw) -> float|None:
     wait = wait and webgpu.WGPUFeatureName_TimestampQuery in self.dev.features
 
-    # Creating bind group layout
-    def bgl_entry(n:int, ty:str):
-      return webgpu.WGPUBindGroupLayoutEntry(binding=n, visibility=webgpu.WGPUShaderStage_Compute,
-                                             buffer=webgpu.WGPUBufferBindingLayout(type=getattr(webgpu, f'WGPUBufferBindingType_{ty}')))
-    bind_entries = (webgpu.WGPUBindGroupLayoutEntry * (1+len(bufs)+len(vals)))(
-      bgl_entry(0, 'Uniform'), *(bgl_entry(i+1, 'Uniform' if i >= len(bufs) else 'Storage') for i in range(len(bufs)+len(vals))))
+    # the layout, pipeline and val uniform buffers only depend on the call signature, which is fixed per program: create them on the first call
+    if not hasattr(self, "pipeline"):
+      def bgl_entry(n:int, ty:str):
+        return webgpu.WGPUBindGroupLayoutEntry(binding=n, visibility=webgpu.WGPUShaderStage_Compute,
+                                               buffer=webgpu.WGPUBufferBindingLayout(type=getattr(webgpu, f'WGPUBufferBindingType_{ty}')))
+      bind_entries = (webgpu.WGPUBindGroupLayoutEntry * (1+len(bufs)+len(vals)))(
+        bgl_entry(0, 'Uniform'), *(bgl_entry(i+1, 'Uniform' if i >= len(bufs) else 'Storage') for i in range(len(bufs)+len(vals))))
 
-    webgpu.wgpuDevicePushErrorScope(self.dev.device_res, webgpu.WGPUErrorFilter_Validation)
-    bind_layout = webgpu.wgpuDeviceCreateBindGroupLayout(self.dev.device_res,
-                                                         webgpu.WGPUBindGroupLayoutDescriptor(entryCount=len(bind_entries), entries=bind_entries))
+      webgpu.wgpuDevicePushErrorScope(self.dev.device_res, webgpu.WGPUErrorFilter_Validation)
+      self.bind_layout = webgpu.wgpuDeviceCreateBindGroupLayout(self.dev.device_res,
+        webgpu.WGPUBindGroupLayoutDescriptor(entryCount=len(bind_entries), entries=bind_entries))
+      pipeline_layout = webgpu.wgpuDeviceCreatePipelineLayout(self.dev.device_res,
+        webgpu.WGPUPipelineLayoutDescriptor(bindGroupLayoutCount=1, bindGroupLayouts=(webgpu.WGPUBindGroupLayout*1)(self.bind_layout)))
+      if err := self.dev.pop_error(): raise RuntimeError(f"Error creating layouts: {err}")
 
-    if err := self.dev.pop_error(): raise RuntimeError(f"Error creating bind group layout: {err}")
-
-    # Creating pipeline layout
-    pipeline_layout_desc = webgpu.WGPUPipelineLayoutDescriptor(bindGroupLayoutCount=1, bindGroupLayouts=(webgpu.WGPUBindGroupLayout*1)(bind_layout))
-
-    webgpu.wgpuDevicePushErrorScope(self.dev.device_res, webgpu.WGPUErrorFilter_Validation)
-    pipeline_layout = webgpu.wgpuDeviceCreatePipelineLayout(self.dev.device_res, pipeline_layout_desc)
-    if err := self.dev.pop_error(): raise RuntimeError(f"Error creating pipeline layout: {err}")
+      self.pipeline = DeviceCreateComputePipeline(self.dev.device_res, webgpu.WGPUComputePipelineDescriptor(layout=pipeline_layout,
+                                                  compute=webgpu.WGPUComputeState(module=self.prg, entryPoint=self.name)))
+      webgpu.wgpuPipelineLayoutRelease(pipeline_layout)
+      self.val_bufs = [self.dev.create_uniform(v) for v in vals]
+    else:
+      for buf, v in zip(self.val_bufs, vals): self.dev.write_buffer(buf, v.to_bytes(4, "little"))
 
     # Creating bind group
-    def bg_entry(n:int, x:webgpu.WGPUBuffer|int|float):
-      buf = x if isinstance(x, webgpu.WGPUBuffer) else self.dev.create_uniform(x)
+    def bg_entry(n:int, buf:webgpu.WGPUBuffer):
       return webgpu.WGPUBindGroupEntry(binding=n, buffer=buf, offset=0, size=webgpu.wgpuBufferGetSize(buf))
-    bindings = (webgpu.WGPUBindGroupEntry * (1+len(bufs)+len(vals)))(bg_entry(0, float('inf')), *(bg_entry(i+1, x) for i,x in enumerate(bufs+vals)))
+    bindings = (webgpu.WGPUBindGroupEntry * (1+len(bufs)+len(vals)))(
+      bg_entry(0, self.dev.inf_buf), *(bg_entry(i+1, x) for i,x in enumerate(bufs+tuple(self.val_bufs))))
 
-    bind_group_desc = webgpu.WGPUBindGroupDescriptor(layout=bind_layout, entryCount=len(bindings), entries=bindings)
+    bind_group_desc = webgpu.WGPUBindGroupDescriptor(layout=self.bind_layout, entryCount=len(bindings), entries=bindings)
     webgpu.wgpuDevicePushErrorScope(self.dev.device_res, webgpu.WGPUErrorFilter_Validation)
     bind_group = webgpu.wgpuDeviceCreateBindGroup(self.dev.device_res, bind_group_desc)
     if err := self.dev.pop_error(): raise RuntimeError(f"Error creating bind group: {err}")
-
-    # Creating compute pipeline
-    compute_desc = webgpu.WGPUComputePipelineDescriptor(layout=pipeline_layout,
-                                                        compute=webgpu.WGPUComputeState(module=self.prg, entryPoint=self.name))
-    pipeline_result = DeviceCreateComputePipeline(self.dev.device_res, compute_desc)
 
     command_encoder = webgpu.wgpuDeviceCreateCommandEncoder(self.dev.device_res, webgpu.WGPUCommandEncoderDescriptor())
     comp_pass_desc = webgpu.WGPUComputePassDescriptor()
@@ -118,7 +120,7 @@ class WebGPUProgram(Program['WebGpuDevice']):
 
     # Begin compute pass
     compute_pass = webgpu.wgpuCommandEncoderBeginComputePass(command_encoder, comp_pass_desc)
-    webgpu.wgpuComputePassEncoderSetPipeline(compute_pass, pipeline_result)
+    webgpu.wgpuComputePassEncoderSetPipeline(compute_pass, self.pipeline)
     webgpu.wgpuComputePassEncoderSetBindGroup(compute_pass, 0, bind_group, 0, None)
     webgpu.wgpuComputePassEncoderDispatchWorkgroups(compute_pass, *global_size)
     webgpu.wgpuComputePassEncoderEnd(compute_pass)
@@ -129,10 +131,7 @@ class WebGPUProgram(Program['WebGpuDevice']):
     webgpu.wgpuQueueSubmit(self.dev.queue, 1, (webgpu.WGPUCommandBuffer*1)(cmd_buf))
 
     # release created objects
-    webgpu.wgpuBindGroupLayoutRelease(bind_layout)
-    webgpu.wgpuPipelineLayoutRelease(pipeline_layout)
     webgpu.wgpuBindGroupRelease(bind_group)
-    webgpu.wgpuComputePipelineRelease(pipeline_result)
     webgpu.wgpuCommandEncoderRelease(command_encoder)
     webgpu.wgpuComputePassEncoderRelease(compute_pass)
     webgpu.wgpuCommandBufferRelease(cmd_buf)
@@ -198,6 +197,9 @@ class WebGpuDevice(Compiled):
     webgpu.wgpuBufferRelease(buf)
 
   def pop_error(self) -> str: return DevicePopErrorScope(self.device_res)[1]
+  # WGSL has no way to express an inf literal, so every kernel reads INFINITY from this uniform (binding 0)
+  @functools.cached_property
+  def inf_buf(self) -> webgpu.WGPUBuffer: return self.create_uniform(float('inf'))
   def create_uniform(self, val:int|float) -> webgpu.WGPUBuffer:
     buf = webgpu.wgpuDeviceCreateBuffer(self.device_res,
                                         webgpu.WGPUBufferDescriptor(size=4, usage=webgpu.WGPUBufferUsage_Uniform | webgpu.WGPUBufferUsage_CopyDst))
