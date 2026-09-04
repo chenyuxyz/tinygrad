@@ -985,7 +985,7 @@ class ElementwiseMixin(CreationMixin):
     """
     return alpha * (self / alpha).elu()
 
-  def selu(self, alpha=1.67326, gamma=1.0507) -> Self:
+  def selu(self, alpha=1.6732632423543772, gamma=1.0507009873554805) -> Self:
     """
     Applies the Scaled Exponential Linear Unit (SELU) function element-wise.
 
@@ -1065,9 +1065,9 @@ class ElementwiseMixin(CreationMixin):
     print(Tensor([-1.5, -1.0, -0.5, 0., 0.5, 1.0, 1.5]).erf().numpy())
     ```
     """
-    # https://personal.math.ubc.ca/~cbm/aands/page_299.htm 7.1.26
+    # https://personal.math.ubc.ca/~cbm/aands/page_299.htm 7.1.26, with a1 rounded so the coefficients sum to 1 and erf(0) is exactly 0
     t = 1.0 / (1.0 + 0.3275911 * (s:=(self >= 0).where(1.0, -1.0)) * self)
-    return s * (1.0 - t * polyN(t, [1.061405429, -1.453152027, 1.421413741, -0.284496736, 0.254829592]) * (-self.square()).exp())
+    return s * (1.0 - t * polyN(t, [1.061405429, -1.453152027, 1.421413741, -0.284496736, 0.254829593]) * (-self.square()).exp())
 
   def softsign(self) -> Self:
     """
