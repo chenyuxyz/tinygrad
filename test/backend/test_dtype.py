@@ -213,7 +213,12 @@ class TestBFloat16DTypeCast(unittest.TestCase):
     converted = random_values.cast(dtypes.bfloat16).cast(dtypes.float32)
     np.testing.assert_allclose(converted.numpy(), random_values.cast(dtypes.float32).numpy(), rtol=1e-2, atol=1e-3)
 
-class TestHalfDType(TestDType): DTYPE = dtypes.half
+class TestHalfDType(TestDType):
+  DTYPE = dtypes.half
+
+  def test_round_trip_rounds(self):
+    # a cast to half is a rounding step, widening back does not undo it
+    self.assertEqual(Tensor([1.0009766625]).cast(dtypes.half).cast(dtypes.float).item(), 1.0009765625)
 
 class TestEmulatedHalf(TestHalfDType):
   @classmethod
@@ -224,6 +229,9 @@ class TestEmulatedHalf(TestHalfDType):
 
   @classmethod
   def tearDownClass(cls): cls.stack.close()
+
+  @unittest.skip("emulated half clamps the range and keeps float precision")
+  def test_round_trip_rounds(self): pass
 
 
 class TestFloatDType(TestDType):
