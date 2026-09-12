@@ -217,7 +217,8 @@ class TestHalfDType(TestDType):
   DTYPE = dtypes.half
 
   def test_round_trip_rounds(self):
-    # a cast to half is a rounding step, widening back does not undo it
+    # a cast to half is a rounding step, widening back does not undo it. an emulated half cast is only a clamp, it keeps float precision
+    if dtypes.half not in supported_dtypes or dtypes.half in EMULATED_DTYPES.tolist(dtypes): self.skipTest("needs a native half")
     self.assertEqual(Tensor([1.0009766625]).cast(dtypes.half).cast(dtypes.float).item(), 1.0009765625)
 
 class TestEmulatedHalf(TestHalfDType):
@@ -229,9 +230,6 @@ class TestEmulatedHalf(TestHalfDType):
 
   @classmethod
   def tearDownClass(cls): cls.stack.close()
-
-  @unittest.skip("emulated half clamps the range and keeps float precision")
-  def test_round_trip_rounds(self): pass
 
 
 class TestFloatDType(TestDType):
