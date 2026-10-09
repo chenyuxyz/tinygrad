@@ -71,7 +71,7 @@ linting = [
 # ]
 testing_minimal = [
   "numpy",
-  "torch==2.9.1",
+  "torch==2.13.0",
   "pytest",
   "pytest-xdist",
   "pytest-split",
