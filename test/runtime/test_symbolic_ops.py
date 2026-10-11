@@ -266,6 +266,10 @@ class TestSymbolicOps(unittest.TestCase):
       expected = t[:i].sum().item()
       np.testing.assert_equal(symbolic, expected)
 
+  def test_sum_empty_symbolic_slice(self):
+    t = Tensor.ones(3, 16).contiguous()
+    np.testing.assert_equal(t.shrink(((1, Variable("k", 0, 1).bind(1)), None)).sum(0).numpy(), np.zeros(16))
+
   def test_mean(self):
     a = Tensor.rand(10, 3)
     for i in range(1, 5):
