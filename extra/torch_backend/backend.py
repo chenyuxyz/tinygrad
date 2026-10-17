@@ -55,22 +55,36 @@ torch._register_device_module("tiny", TinyBackend())
 torch.utils.generate_methods_for_privateuse1_backend()
 aten = torch.ops.aten
 
+# a tiny tensor has no Storage at all, but dynamo fakifies its inputs through untyped_storage(). hand it a meta storage,
+# torch's own "a storage with no data", which is what MetaConverter rebuilds from it anyway. dynamo compares storage
+# identity to decide if two tensors alias, so it is cached on the tinygrad Tensor: t, t.detach() and nn.Parameter(t)
+# are different torch tensors over one tinygrad Tensor and do alias
+_untyped_storage = torch.Tensor.untyped_storage
+def untyped_storage(self:torch.Tensor):
+  # only a tiny tensor is storage-less by our doing: sparse and nested ones are torch's, and keep torch's own error
+  if torch._C._has_storage(self) or self.device.type != "tiny": return _untyped_storage(self)
+  if getattr(x:=unwrap(self), "_meta_storage", None) is None: x._meta_storage = torch.UntypedStorage(self.nbytes, device="meta")
+  return x._meta_storage
+torch.Tensor.untyped_storage = untyped_storage
+
 # track view relationships for in place operations
 def canonical_base(view: Tensor): return getattr(view, "_view_base", view)
 def derived_views(base: Tensor): return [t for tref in getattr(base, "_views", set()) if (t:=tref()) is not None]
 def unwrap_args(args, kwargs):
   return [unwrap(x) if isinstance(x, torch.Tensor) else x for x in args], {k:unwrap(v) if isinstance(v, torch.Tensor) else v for k,v in kwargs.items()}
+# record that `view` is `base` with `ops` applied, so a later in place write to either goes through the base
+def register_view(base: Tensor, view: Tensor, ops) -> Tensor:
+  view._view_base, view._view_ops = base, ops
+  base._views = getattr(base, "_views", set())
+  base._views.add(weakref.ref(view))
+  return view
+
 def wrap_view_op(fn):
   @functools.wraps(fn)
   def _wrap(*args, **kwargs):
     args, kwargs = unwrap_args(args, kwargs)
     ret = fn(*args, **kwargs)
-    base = canonical_base(args[0])
-    ret._view_base = base
-    base._views = getattr(base, "_views", set())
-    base._views.add(weakref.ref(ret))
-    ret._view_ops = _get_view_ops(args[0]) + [(fn, args[1:], kwargs)]
-    return wrap(ret)
+    return wrap(register_view(canonical_base(args[0]), ret, _get_view_ops(args[0]) + [(fn, args[1:], kwargs)]))
   return _wrap
 
 # NOTE: list assignment raises IndexError on an out of range dim, and the index must be a tuple: a list of all ints is one advanced index
@@ -349,6 +363,8 @@ def sort_values(input, dim=-1, descending=False, stable=True, values=None, indic
 from torch._decomp import get_decompositions
 decomps = [
   aten.native_layer_norm_backward,
+  # functionalizing a training BatchNorm under torch.compile gives this instead of aten.native_batch_norm
+  aten._native_batch_norm_legit_functional,
   aten.native_group_norm_backward,
   aten.linalg_cross,
   aten.addmm,
